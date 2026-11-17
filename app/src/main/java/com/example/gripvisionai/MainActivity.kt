@@ -1,20 +1,11 @@
-
 package com.example.gripvisionai
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import android.os.Bundle
 import android.os.SystemClock
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.*
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -37,6 +28,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -147,8 +142,119 @@ data class GripMetrics(
     val habitAlert: String? = null,
     val coachingTip: String = "Hold your racket handle inside the octagon guide to scan"
 )
+
 // ==========================================
-// 4. LIVE GRIP SCANNER + 8-BEVEL AR DIAL
+// 2. MEDIAPIPE GRIP ANALYZER ENGINE
+// ==========================================
+
+class GripAnalyzer(
+    context: Context,
+    private val onMetricsUpdated: (GripMetrics) -> Unit
+) {
+    var sport: GripSport = GripSport.TENNIS
+    var shot: ShotPreset = ShotPreset.SERVE_VOLLEY
+    var isLeftHanded: Boolean = false
+    var isFrozen: Boolean = false
+
+    private var handLandmarker: HandLandmarker? = null
+
+    init {
+        try {
+            val baseOptions = BaseOptions.builder()
+                .setModelAssetPath("hand_landmarker.task")
+                .build()
+
+            val options = HandLandmarker.HandLandmarkerOptions.builder()
+                .setBaseOptions(baseOptions)
+                .setRunningMode(RunningMode.IMAGE)
+                .setNumHands(1)
+                .build()
+
+            handLandmarker = HandLandmarker.createFromOptions(context, options)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun analyzeFrame(imageProxy: ImageProxy) {
+        if (isFrozen) {
+            imageProxy.close()
+            return
+        }
+
+        val mediaImage = imageProxy.image
+        if (mediaImage != null && handLandmarker != null) {
+            try {
+                val bitmap = imageProxy.toBitmap()
+                val matrix = Matrix().apply {
+                    postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                }
+                val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                val mpImage = BitmapImageBuilder(rotatedBitmap).build()
+
+                val result = handLandmarker?.detect(mpImage)
+                if (result != null && result.landmarks().isNotEmpty()) {
+                    val landmarks = result.landmarks()[0]
+                    val metrics = computeMetrics(landmarks, sport, shot, isLeftHanded)
+                    onMetricsUpdated(metrics)
+                } else {
+                    onMetricsUpdated(GripMetrics(coachingTip = "No hand detected. Center your grip inside the guide."))
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        imageProxy.close()
+    }
+
+    private fun computeMetrics(
+        landmarks: List<NormalizedLandmark>,
+        sport: GripSport,
+        shot: ShotPreset,
+        isLeftHanded: Boolean
+    ): GripMetrics {
+        val target = getGripTarget(sport, shot)
+
+        // Index finger knuckle is landmark 5, wrist is landmark 0
+        val wrist = landmarks[0]
+        val indexKnuckle = landmarks[5]
+
+        val dx = indexKnuckle.x() - wrist.x()
+        val dy = indexKnuckle.y() - wrist.y()
+        val angleRad = atan2(dy.toDouble(), dx.toDouble())
+        val angleDeg = (angleRad * 180.0 / PI).toFloat()
+
+        // Approximate bevel mapping based on angle relative to vertical orientation
+        val normalizedAngle = (angleDeg + 180f) % 360f
+        val calculatedBevel = ((normalizedAngle / 45f).toInt() % 8) + 1
+
+        val bevelMatch = calculatedBevel == target.targetBevel
+        val lockScore = if (bevelMatch) 92 else 55
+
+        val habitAlert = if (!bevelMatch && lockScore < 60) "Adjust knuckle position closer to Bevel ${target.targetBevel}" else null
+        val fingerSpreadStatus = if (landmarks.size > 20) "Relaxed" else "Tight"
+
+        return GripMetrics(
+            landmarks = landmarks,
+            lockScore = lockScore,
+            detectedBevel = "Bevel $calculatedBevel",
+            fingerSpreadStatus = fingerSpreadStatus,
+            habitAlert = habitAlert,
+            coachingTip = target.tip
+        )
+    }
+
+    private fun ImageProxy.toBitmap(): Bitmap {
+        val buffer = planes[0].buffer
+        buffer.rewind()
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }
+}
+
+// ==========================================
+// 3. LIVE GRIP SCANNER + 8-BEVEL AR DIAL
 // ==========================================
 
 @Composable
@@ -356,7 +462,7 @@ fun GripCameraScreen() {
 }
 
 // ==========================================
-// 5. 8-BEVEL OCTAGON & 21-POINT HAND UI
+// 4. 8-BEVEL OCTAGON & 21-POINT HAND UI
 // ==========================================
 
 @Composable
@@ -436,8 +542,8 @@ fun HandSkeletonOverlay(metrics: GripMetrics) {
 
         connections.forEach { (a, b) ->
             if (a < landmarks.size && b < landmarks.size) {
-                val start = Offset(landmarks.get(a).x() * size.width, landmarks.get(a).y() * size.height)
-                val end = Offset(landmarks.get(b).x() * size.width, landmarks.get(b).y() * size.height)
+                val start = Offset(landmarks[a].x() * size.width, landmarks[a].y() * size.height)
+                val end = Offset(landmarks[b].x() * size.width, landmarks[b].y() * size.height)
                 drawLine(color = lineColor, start = start, end = end, strokeWidth = 8f, cap = StrokeCap.Round)
             }
         }
