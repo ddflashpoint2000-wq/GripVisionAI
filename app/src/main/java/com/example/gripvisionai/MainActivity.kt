@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -39,17 +40,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.components.containers.Landmark
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import java.util.concurrent.Executors
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
-import com.google.mediapipe.tasks.components.containers.Landmark
-import kotlin.math.abs
+import kotlin.math.sqrt
 
 // ==========================================
 // 1. SPORT & SHOT GRIP PRESETS
@@ -147,7 +150,6 @@ data class GripMetrics(
     val habitAlert: String? = null,
     val coachingTip: String = "Hold your racket handle inside the octagon guide to scan"
 )
-
 // ==========================================
 // 2. 3D MEDIAPIPE GRIP ANALYZER ENGINE
 // ==========================================
@@ -155,7 +157,7 @@ data class GripMetrics(
 class GripAnalyzer(
     context: Context,
     private val onMetricsUpdated: (GripMetrics) -> Unit
-    ){
+) {
     var sport: GripSport = GripSport.TENNIS
     var shot: ShotPreset = ShotPreset.SERVE_VOLLEY
     var isLeftHanded: Boolean = false
@@ -196,7 +198,7 @@ class GripAnalyzer(
         }
 
         try {
-            val frameTime = android.os.SystemClock.uptimeMillis()
+            val frameTime = SystemClock.uptimeMillis()
             val bitmap = imageProxy.toBitmap()
             val matrix = Matrix().apply {
                 postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
@@ -211,7 +213,7 @@ class GripAnalyzer(
         }
     }
 
-    private fun handleResult(result: com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult) {
+    private fun handleResult(result: HandLandmarkerResult) {
         val screenLandmarks = result.landmarks().firstOrNull()
         val worldLandmarks = result.worldLandmarks().firstOrNull()
 
@@ -223,13 +225,11 @@ class GripAnalyzer(
 
         val target = getGripTarget(sport, shot)
 
-        // 1. 3D Palm Plane Normal Vector (Wrist 0 -> Index MCP 5 x Wrist 0 -> Pinky MCP 17)
-                val w = worldLandmarks.get(0)
-        val idxMcp = worldLandmarks.get(5)
-        val midMcp = worldLandmarks.get(9)
-        val pkyMcp = worldLandmarks.get(17)
-        val idxTip = worldLandmarks.get(8)
-        
+        val w = worldLandmarks[0]
+        val idxMcp = worldLandmarks[5]
+        val midMcp = worldLandmarks[9]
+        val pkyMcp = worldLandmarks[17]
+        val idxTip = worldLandmarks[8]
 
         val v1x = idxMcp.x() - w.x()
         val v1y = idxMcp.y() - w.y()
@@ -239,30 +239,24 @@ class GripAnalyzer(
         val v2y = pkyMcp.y() - w.y()
         val v2z = pkyMcp.z() - w.z()
 
-        // Cross product gives the 3D direction the palm is facing
         val nx = v1y * v2z - v1z * v2y
         val nz = v1x * v2y - v1y * v2x
 
-        // Calculate forearm roll angle in degrees (-180 to +180)
         var rawRollDeg = (atan2(nx.toDouble(), nz.toDouble()) * 180.0 / PI).toFloat()
         if (isLeftHanded) rawRollDeg = -rawRollDeg
 
-        // 2. Exponential Moving Average (EMA) Smoothing to stop jitter
         val prev = smoothedRollDeg
         val smoothDeg = if (prev == null) rawRollDeg else (0.30f * rawRollDeg + 0.70f * prev)
         smoothedRollDeg = smoothDeg
 
-        // 3. Map smoothed 3D roll angle to Bevels 1–8 (each bevel = 45 degrees)
         val normalized = (smoothDeg + 360f) % 360f
         val detectedBevelNum = (((normalized + 22.5f) / 45f).toInt() % 8) + 1
 
-        // Shortest angular distance to target bevel angle
         var angleDiff = abs(smoothDeg - target.targetAngleDeg) % 360f
         if (angleDiff > 180f) angleDiff = 360f - angleDiff
 
         val lockScore = (100f - (angleDiff * 0.85f)).toInt().coerceIn(25, 99)
 
-        // 4. 3D Bad-Habit Detection (Index Finger Up Paddle & Tight Death Grip)
         val palmWidth = dist3D(idxMcp, pkyMcp).coerceAtLeast(0.01f)
         val indexExtension = dist3D(idxMcp, idxTip) / palmWidth
         val fingerSpread = dist3D(idxMcp, midMcp) / palmWidth
@@ -299,17 +293,15 @@ class GripAnalyzer(
     }
 
     private fun dist3D(a: Landmark, b: Landmark): Float {
-    val dx = a.x() - b.x()
-    val dy = a.y() - b.y()
-    val dz = a.z() - b.z()
-    return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+        val dx = a.x() - b.x()
+        val dy = a.y() - b.y()
+        val dz = a.z() - b.z()
+        return sqrt(dx * dx + dy * dy + dz * dz)
     }
- 
 }
 
-
 // ==========================================
-// 3. MAIN ACTIVITY & UI COMPOSABLES
+// 3. MAIN ACTIVITY ENTRY POINT
 // ==========================================
 
 class MainActivity : ComponentActivity() {
@@ -325,6 +317,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+// ==========================================
+// 4. MAIN CAMERA & CONTROLS UI
+// ==========================================
 
 @Composable
 fun GripVisionApp() {
@@ -365,7 +360,7 @@ fun GripVisionApp() {
     analyzer.isFrozen = isFrozen
 
     if (!hasCameraPermission) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Camera permission is required to analyze grips.", color = Color.White)
                 Spacer(modifier = Modifier.height(12.dp))
@@ -380,7 +375,6 @@ fun GripVisionApp() {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         CameraPreview(analyzer = analyzer)
 
-        // Overlays
         OctagonHandleGuide(
             gripName = getGripTarget(selectedSport, selectedShot).gripName,
             targetBevel = getGripTarget(selectedSport, selectedShot).targetBevel,
@@ -388,107 +382,12 @@ fun GripVisionApp() {
         )
         HandSkeletonOverlay(metrics = metrics)
 
-        // Top & Bottom Controls
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Header / Selectors
-            Column {
-                            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                GripSport.entries.forEach { sport ->
-                    FilterChip(
-                        selected = selectedSport == sport,
-                        onClick = { selectedSport = sport },
-                        label = { Text(sport.label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = Color(0xAA121A1E),
-                            labelColor = Color.White,
-                            selectedContainerColor = Color(0xFF00FF88),
-                            selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-                            }
-                            
-
-@Composable
-fun CameraPreview(analyzer: GripAnalyzer) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            val executor = Executors.newSingleThreadExecutor()
-            cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-
-                imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                    analyzer.analyzeFrame(imageProxy)
-                }
-
-                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                try {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview,
-                        imageAnalysis
-                    )
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }, ContextCompat.getMainExecutor(ctx))
-            previewView
-        }
-    )
-}
-
-@Composable
-fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = size.width / 2f
-            val cy = size.height / 2f
-            val radius = 120f
-
-            val path = Path()
-            for (i in 0 until 8) {
-                val angle = (i * 45.0 - 90.0) * PI / 180.0
-                val x = cx + (radius * cos(angle)).toFloat()
-                val y = cy + (radius * sin(angle)).toFloat()
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            path.close()
-
-            drawPath(
-                path = path,
-                color = Color(0xFF00FF88).copy(alpha = 0.6f),
-                style = Stroke(width = 4.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f))
-            )
-
-            val mappedBevel = if (isLeftHanded && targetBevel in 2..4) (10 - targetBevel) else targetBevel
-            val targetAngle = ((mappedBevel - 1) * 45.0 - 90.0) * PI / 180.0
-            val tx = cx + (radius * cos(targetAngle)).toFloat()
-            val ty = cy + (radius * sin(targetAngle)).toFloat()
-            // Header / Selectors
             Column(modifier = Modifier.statusBarsPadding()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -570,7 +469,6 @@ fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean
                 }
             }
 
-            // Bottom Freeze Button + 3-Metric Glass Card
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -619,125 +517,203 @@ fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean
         }
     }
 }
+// ==========================================
+// 4. MAIN CAMERA & CONTROLS UI
+// ==========================================
 
 @Composable
-fun CameraPreview(analyzer: GripAnalyzer) {
+fun GripVisionApp() {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            val executor = Executors.newSingleThreadExecutor()
-            cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+    }
 
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-
-                imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                    analyzer.analyzeFrame(imageProxy)
-                }
-
-                try {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(
-                        lifecycleOwner,
-                        CameraSelector.DEFAULT_BACK_CAMERA,
-                        preview,
-                        imageAnalysis
-                    )
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }, ContextCompat.getMainExecutor(ctx))
-            previewView
-        }
-    )
-}
-
-@Composable
-fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = size.width / 2f
-            val cy = size.height / 2f
-            val radius = 120f
-
-            val path = Path()
-            for (i in 0 until 8) {
-                val angle = (i * 45.0 - 90.0) * PI / 180.0
-                val x = cx + (radius * cos(angle)).toFloat()
-                val y = cy + (radius * sin(angle)).toFloat()
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            path.close()
-
-            drawPath(
-                path = path,
-                color = Color(0xFF00FF88).copy(alpha = 0.6f),
-                style = Stroke(width = 4.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f))
-            )
-
-            val mappedBevel = if (isLeftHanded && targetBevel in 2..4) (10 - targetBevel) else targetBevel
-            val targetAngle = ((mappedBevel - 1) * 45.0 - 90.0) * PI / 180.0
-            val tx = cx + (radius * cos(targetAngle)).toFloat()
-            val ty = cy + (radius * sin(targetAngle)).toFloat()
-
-            drawCircle(
-                color = Color(0xFF00FF88),
-                radius = 18f,
-                center = Offset(tx, ty)
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(y = (-135).dp)
-                .background(Color(0xBB10181C), RoundedCornerShape(20.dp))
-                .padding(horizontal = 14.dp, vertical = 6.dp)
-        ) {
-            Text(
-                text = "Target: $gripName (Bevel $targetBevel)",
-                color = Color(0xFF00FF88),
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp
-            )
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            launcher.launch(Manifest.permission.CAMERA)
         }
     }
-}
 
-@Composable
-fun HandSkeletonOverlay(metrics: GripMetrics) {
-    val landmarks = metrics.landmarks
-    if (landmarks.isEmpty()) return
+    var selectedSport by remember { mutableStateOf(GripSport.TENNIS) }
+    var selectedShot by remember { mutableStateOf(ShotPreset.SERVE_VOLLEY) }
+    var isLeftHanded by remember { mutableStateOf(false) }
+    var isFrozen by remember { mutableStateOf(false) }
+    var metrics by remember { mutableStateOf(GripMetrics()) }
 
-    val connections = listOf(
-        0 to 1, 1 to 2, 2 to 3, 3 to 4,
-        0 to 5, 5 to 6, 6 to 7, 7 to 8,
-        5 to 9, 9 to 10, 10 to 11, 11 to 12,
-        9 to 13, 13 to 14, 14 to 15, 15 to 16,
-        13 to 17, 17 to 18, 18 to 19, 19 to 20,
-        0 to 17
-    )
+    val analyzer = remember {
+        GripAnalyzer(context) { newMetrics ->
+            metrics = newMetrics
+        }
+    }
 
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val lineColor = if (metrics.habitAlert == null) Color(0xFF00FF88) else Color(0xFFFF3B30)
+    analyzer.sport = selectedSport
+    analyzer.shot = selectedShot
+    analyzer.isLeftHanded = isLeftHanded
+    analyzer.isFrozen = isFrozen
 
-        connections.forEach { (a, b) ->
-            Modifier.height(5.dp))
-Text(
-text = label,
-color = Color.LightGray,
-fontSize = 11.sp,
-maxLines = 1
-)
-}
+    if (!hasCameraPermission) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Camera permission is required to analyze grips.", color = Color.White)
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }) {
+                    Text("Grant Permission")
+                }
+            }
+        }
+        return
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        CameraPreview(analyzer = analyzer)
+
+        OctagonHandleGuide(
+            gripName = getGripTarget(selectedSport, selectedShot).gripName,
+            targetBevel = getGripTarget(selectedSport, selectedShot).targetBevel,
+            isLeftHanded = isLeftHanded
+        )
+        HandSkeletonOverlay(metrics = metrics)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.statusBarsPadding()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "GripVision AI",
+                        color = Color(0xFF00FF88),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    FilterChip(
+                        selected = isLeftHanded,
+                        onClick = { isLeftHanded = !isLeftHanded },
+                        label = { Text(if (isLeftHanded) "Lefty" else "Righty", fontSize = 12.sp, maxLines = 1) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xAA121A1E),
+                            labelColor = Color.White,
+                            selectedContainerColor = Color(0xFF00FF88),
+                            selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    GripSport.entries.forEach { sport ->
+                        FilterChip(
+                            selected = selectedSport == sport,
+                            onClick = { selectedSport = sport },
+                            label = { Text(sport.label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = Color(0xAA121A1E),
+                                labelColor = Color.White,
+                                selectedContainerColor = Color(0xFF00FF88),
+                                selectedLabelColor = Color.Black
+                            )
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    ShotPreset.entries.forEach { shot ->
+                        FilterChip(
+                            selected = selectedShot == shot,
+                            onClick = { selectedShot = shot },
+                            label = { Text(shot.label, fontSize = 11.sp, maxLines = 1) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                containerColor = Color(0xAA121A1E),
+                                labelColor = Color.LightGray,
+                                selectedContainerColor = Color(0xFF00E5FF),
+                                selectedLabelColor = Color.Black
+                            )
+                        )
+                    }
+                }
+
+                metrics.habitAlert?.let { alertMsg ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                            .background(Color(0xDDFF3B30), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = alertMsg,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Button(
+                    onClick = { isFrozen = !isFrozen },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isFrozen) Color(0xFF00E5FF) else Color(0xFF00FF88)
+                    ),
+                    shape = CircleShape,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    Text(
+                        text = if (isFrozen) "RESUME LIVE SCAN" else "SNAP & CHECK GRIP",
+                        color = Color.Black,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xCC121A1E))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            GripMetricGauge("Grip Lock", "${metrics.lockScore}%", Color(0xFF00FF88), Modifier.weight(1f))
+                            GripMetricGauge("Detected", metrics.detectedBevel, Color(0xFF00E5FF), Modifier.weight(1f))
+                            GripMetricGauge("Fingers", metrics.fingerSpreadStatus, Color(0xFF00E5FF), Modifier.weight(1f))
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = metrics.coachingTip,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            lineHeight = 19.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
