@@ -888,6 +888,216 @@ fun HandSilhouetteOverlay(metrics: GripMetrics) {
         // Crisp continuous white silhouette outline
         drawPath(
             path = smoothPath,
+        val palmSpan = hypot(indexMcp.x - pinkyMcp.x, indexMcp.y - pinkyMcp.y).coerceAtLeast(30f)
+
+        // Ensure outward normal always points away from palm center regardless of left/right hand
+        val palmCenter = Offset(
+            (wrist.x + indexMcp.x + pinkyMcp.x) / 3f,
+            (wrist.y + indexMcp.y + pinkyMcp.y) / 3f
+        )
+        val rawWristDir = perp(wrist, pt(9))
+        val toPinky = Offset(pinkyMcp.x - palmCenter.x, pinkyMcp.y - palmCenter.y)
+        val sign = if (rawWristDir.x * toPinky.x + rawWristDir.y * toPinky.y >= 0f) 1f else -1f
+
+        fun outNormal(a: Offset, b: Offset): Offset {
+            val n = perp(a, b)
+            return Offset(n.x * sign, n.y * sign)
+        }
+
+        // Anatomical finger half-widths scaled to actual hand size
+        val wThumb = palmSpan * 0.145f
+        val wIndex = palmSpan * 0.125f
+        val wMiddle = palmSpan * 0.130f
+        val wRing = palmSpan * 0.122f
+        val wPinky = palmSpan * 0.105f
+
+        val contour = mutableListOf<Offset>()
+
+        // 1. Ulnar forearm/wrist entry -> outer heel of palm -> pinky base
+        val wristDir = Offset(pt(9).x - wrist.x, pt(9).y - wrist.y)
+        val wristLen = hypot(wristDir.x, wristDir.y).coerceAtLeast(1f)
+        val downArm = Offset(-wristDir.x / wristLen, -wristDir.y / wristLen)
+        val ulnarSide = outNormal(wrist, pinkyMcp)
+        val radialSide = Offset(-ulnarSide.x, -ulnarSide.y)
+
+        contour.add(
+            Offset(
+                wrist.x + ulnarSide.x * palmSpan * 0.34f + downArm.x * palmSpan * 0.55f,
+                wrist.y + ulnarSide.y * palmSpan * 0.34f + downArm.y * palmSpan * 0.55f
+            )
+        )
+        contour.add(
+            Offset(
+                wrist.x + ulnarSide.x * palmSpan * 0.38f,
+                wrist.y + ulnarSide.y * palmSpan * 0.38f
+            )
+        )
+        contour.add(
+            Offset(
+                pinkyMcp.x + ulnarSide.x * (wPinky * 1.15f),
+                pinkyMcp.y + ulnarSide.y * (wPinky * 1.15f)
+            )
+        )
+
+        fun addFinger(mcpIdx: Int, pipIdx: Int, dipIdx: Int, tipIdx: Int, halfW: Float) {
+            val mcp = pt(mcpIdx)
+            val pip = pt(pipIdx)
+            val dip = pt(dipIdx)
+            val tip = pt(tipIdx)
+
+            val n1 = outNormal(mcp, pip)
+            val n2 = outNormal(pip, dip)
+            val n3 = outNormal(dip, tip)
+
+            val axis = Offset(tip.x - dip.x, tip.y - dip.y)
+            val axisLen = hypot(axis.x, axis.y).coerceAtLeast(1f)
+            val tipDir = Offset(axis.x / axisLen, axis.y / axisLen)
+
+            // Outer side going up
+            contour.add(Offset(pip.x + n1.x * halfW * 0.96f, pip.y + n1.y * halfW * 0.96f))
+            contour.add(Offset(dip.x + n2.x * halfW * 0.88f, dip.y + n2.y * halfW * 0.88f))
+
+            // Smooth rounded fingertip arc
+            val tipCrown = Offset(tip.x + tipDir.x * halfW * 0.72f, tip.y + tipDir.y * halfW * 0.72f)
+            contour.add(
+                Offset(
+                    tip.x + n3.x * halfW * 0.72f + tipDir.x * halfW * 0.35f,
+                    tip.y + n3.y * halfW * 0.72f + tipDir.y * halfW * 0.35f
+                )
+            )
+            contour.add(tipCrown)
+            contour.add(
+                Offset(
+                    tip.x - n3.x * halfW * 0.72f + tipDir.x * halfW * 0.35f,
+                    tip.y - n3.y * halfW * 0.72f + tipDir.y * halfW * 0.35f
+                )
+            )
+
+            // Inner side going down
+            contour.add(Offset(dip.x - n2.x * halfW * 0.88f, dip.y - n2.y * halfW * 0.88f))
+            contour.add(Offset(pip.x - n1.x * halfW * 0.96f, pip.y - n1.y * halfW * 0.96f))
+        }
+
+        fun addWebbing(mcpA: Int, pipA: Int, mcpB: Int, pipB: Int) {
+            val webA = lerp(pt(mcpA), pt(pipA), 0.26f)
+            val webB = lerp(pt(mcpB), pt(pipB), 0.26f)
+            contour.add(lerp(webA, webB, 0.5f))
+        }
+
+        // 2. Pinky -> Ring -> Middle -> Index with high anatomical webbing valleys
+        addFinger(17, 18, 19, 20, wPinky)
+        addWebbing(17, 18, 13, 14)
+        addFinger(13, 14, 15, 16, wRing)
+        addWebbing(13, 14, 9, 10)
+        addFinger(9, 10, 11, 12, wMiddle)
+        addWebbing(9, 10, 5, 6)
+        addFinger(5, 6, 7, 8, wIndex)
+
+        // 3. Radial side of Index -> Thumb saddle (purlicue) -> Thumb -> Radial wrist exit
+        val idxBaseRadial = Offset(
+            indexMcp.x + radialSide.x * (wIndex * 1.12f),
+            indexMcp.y + radialSide.y * (wIndex * 1.12f)
+        )
+        contour.add(idxBaseRadial)
+
+        val thumbCmc = pt(1)
+        val thumbMcp = pt(2)
+        val thumbIp = pt(3)
+        val thumbTip = pt(4)
+
+        val saddleMid = lerp(idxBaseRadial, lerp(thumbMcp, thumbIp, 0.45f), 0.52f)
+        contour.add(saddleMid)
+
+        val tn1 = outNormal(thumbMcp, thumbIp)
+        val tn2 = outNormal(thumbIp, thumbTip)
+        val tAxis = Offset(thumbTip.x - thumbIp.x, thumbTip.y - thumbIp.y)
+        val tLen = hypot(tAxis.x, tAxis.y).coerceAtLeast(1f)
+        val tTipDir = Offset(tAxis.x / tLen, tAxis.y / tLen)
+
+        contour.add(Offset(thumbIp.x + tn1.x * wThumb * 0.88f, thumbIp.y + tn1.y * wThumb * 0.88f))
+        contour.add(
+            Offset(
+                thumbTip.x + tn2.x * wThumb * 0.72f + tTipDir.x * wThumb * 0.35f,
+                thumbTip.y + tn2.y * wThumb * 0.72f + tTipDir.y * wThumb * 0.35f
+            )
+        )
+        contour.add(Offset(thumbTip.x + tTipDir.x * wThumb * 0.72f, thumbTip.y + tTipDir.y * wThumb * 0.72f))
+        contour.add(
+            Offset(
+                thumbTip.x - tn2.x * wThumb * 0.72f + tTipDir.x * wThumb * 0.35f,
+                thumbTip.y - tn2.y * wThumb * 0.72f + tTipDir.y * wThumb * 0.35f
+            )
+        )
+
+        contour.add(Offset(thumbIp.x - tn1.x * wThumb * 0.95f, thumbIp.y - tn1.y * wThumb * 0.95f))
+        contour.add(Offset(thumbMcp.x - tn1.x * wThumb * 1.05f, thumbMcp.y - tn1.y * wThumb * 1.05f))
+        contour.add(
+            Offset(
+                thumbCmc.x + radialSide.x * palmSpan * 0.22f,
+                thumbCmc.y + radialSide.y * palmSpan * 0.22f
+            )
+        )
+        contour.add(
+            Offset(
+                wrist.x + radialSide.x * palmSpan * 0.36f,
+                wrist.y + radialSide.y * palmSpan * 0.36f
+            )
+        )
+        contour.add(
+            Offset(
+                wrist.x + radialSide.x * palmSpan * 0.34f + downArm.x * palmSpan * 0.55f,
+                wrist.y + radialSide.y * palmSpan * 0.34f + downArm.y * palmSpan * 0.55f
+            )
+        )
+
+        // Smooth spline through contour points
+        val smoothPath = Path()
+        if (contour.size >= 3) {
+            smoothPath.moveTo(contour.first().x, contour.first().y)
+            for (i in 0 until contour.size - 1) {
+                val p0 = contour[i]
+                val p1 = contour[i + 1]
+                val mid = lerp(p0, p1, 0.5f)
+                smoothPath.quadraticBezierTo(p0.x, p0.y, mid.x, mid.y)
+            }
+            val last = contour.last()
+            smoothPath.lineTo(last.x, last.y)
+        }
+
+        val topY = contour.minOfOrNull { it.y } ?: 0f
+        val bottomY = contour.maxOfOrNull { it.y } ?: size.height
+        val fadeSpan = (bottomY - topY).coerceAtLeast(100f)
+
+        val glowBrush = Brush.verticalGradient(
+            0.0f to Color.White.copy(alpha = 0.28f),
+            0.78f to Color.White.copy(alpha = 0.20f),
+            1.0f to Color.Transparent,
+            startY = topY,
+            endY = topY + fadeSpan
+        )
+
+        val lineBrush = Brush.verticalGradient(
+            0.0f to Color.White.copy(alpha = 0.96f),
+            0.78f to Color.White.copy(alpha = 0.85f),
+            1.0f to Color.Transparent,
+            startY = topY,
+            endY = topY + fadeSpan
+        )
+
+        // Soft outer luminance halo
+        drawPath(
+            path = smoothPath,
+            brush = glowBrush,
+            style = Stroke(
+                width = 8.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+
+        // Crisp continuous white silhouette outline
+        drawPath(
+            path = smoothPath,
             brush = lineBrush,
             style = Stroke(
                 width = 2.4.dp.toPx(),
@@ -946,17 +1156,17 @@ fun GripMetricGauge(
             Text(
                 text = value,
                 color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                maxLines = 1
-            )
-        }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = label,
-            color = Color.LightGray,
-            fontSize = 11.sp,
-            maxLines = 1
-        )
-    }
+fontWeight = FontWeight.Bold,
+fontSize = 13.sp,
+maxLines = 1
+)
+}
+Spacer(modifier = Modifier.height(6.dp))
+Text(
+text = label,
+color = Color.LightGray,
+fontSize = 11.sp,
+maxLines = 1
+)
+}
 }
