@@ -714,24 +714,132 @@ fun HandSkeletonOverlay(metrics: GripMetrics) {
         }
     }
 }
+@Composable
+fun HandSkeletonOverlay(metrics: GripMetrics) {
+    val landmarks = metrics.landmarks
+    if (landmarks.size < 21) return
 
+    val fingerChains = listOf(
+        listOf(0, 1, 2, 3, 4),
+        listOf(0, 5, 6, 7, 8),
+        listOf(9, 10, 11, 12),
+        listOf(13, 14, 15, 16),
+        listOf(0, 17, 18, 19, 20)
+    )
+
+    val palmIndices = listOf(0, 1, 5, 9, 13, 17)
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val baseColor = when {
+            metrics.habitAlert != null -> Color(0xFFFF3B30)
+            metrics.lockScore >= 80 -> Color(0xFF00FF88)
+            else -> Color(0xFF00E5FF)
+        }
+
+        fun pt(idx: Int) = Offset(
+            landmarks[idx].x() * size.width,
+            landmarks[idx].y() * size.height
+        )
+
+        // 1. Translucent Holographic Palm Mesh (Meta Quest VR style)
+        val palmPath = Path().apply {
+            val first = pt(palmIndices.first())
+            moveTo(first.x, first.y)
+            palmIndices.drop(1).forEach { idx ->
+                val p = pt(idx)
+                lineTo(p.x, p.y)
+            }
+            close()
+        }
+        drawPath(path = palmPath, color = baseColor.copy(alpha = 0.22f))
+        drawPath(path = palmPath, color = baseColor.copy(alpha = 0.65f), style = Stroke(width = 4f))
+
+        // 2. Tapered Translucent Finger Capsules + Inner Energy Core
+        fingerChains.forEach { chain ->
+            for (i in 0 until chain.size - 1) {
+                val start = pt(chain[i])
+                val end = pt(chain[i + 1])
+                val taperFactor = 1f - (i * 0.16f)
+
+                drawLine(
+                    color = baseColor.copy(alpha = 0.28f),
+                    start = start,
+                    end = end,
+                    strokeWidth = 34f * taperFactor,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = baseColor.copy(alpha = 0.85f),
+                    start = start,
+                    end = end,
+                    strokeWidth = 8f * taperFactor,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+
+        // 3. Concentric VR Joint Nodes + Yellow Index Knuckle Highlight (Landmark 5)
+        landmarks.forEachIndexed { idx, _ ->
+            val center = pt(idx)
+            val isIndexKnuckle = idx == 5
+            val isFingertip = idx in listOf(4, 8, 12, 16, 20)
+
+            if (isIndexKnuckle) {
+                drawCircle(
+                    color = Color(0xFFFFEE00).copy(alpha = 0.35f),
+                    radius = 28f,
+                    center = center
+                )
+                drawCircle(
+                    color = Color(0xFFFFEE00),
+                    radius = 14f,
+                    center = center
+                )
+            } else {
+                drawCircle(
+                    color = baseColor.copy(alpha = 0.45f),
+                    radius = if (isFingertip) 14f else 16f,
+                    center = center
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = if (isFingertip) 6f else 7f,
+                    center = center
+                )
+            }
+        }
+    }
+}
 
 @Composable
-fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Modifier = Modifier) {
+fun GripMetricGauge(
+    label: String,
+    value: String,
+    ringColor: Color,
+    modifier: Modifier = Modifier,
+    progress: Float = 0.79f
+) {
     Column(
-        modifier = modifier.padding(horizontal = 4.dp),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
+        Box(
+            modifier = Modifier.size(72.dp),
+            contentAlignment = Alignment.Center
+        ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawArc(
                     color = ringColor.copy(alpha = 0.25f),
-                    startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                    startAngle = 0f,
+                    sweepAngle = 360f,
+                    useCenter = false,
                     style = Stroke(width = 7.dp.toPx())
                 )
                 drawArc(
                     color = ringColor,
-                    startAngle = -90f, sweepAngle = 285f, useCenter = false,
+                    startAngle = -90f,
+                    sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                    useCenter = false,
                     style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
                 )
             }
@@ -743,39 +851,7 @@ fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Mo
                 maxLines = 1
             )
         }
-        Spacer(modifier = Modifier.height(5.dp))
-        Text(
-            text = label,
-            color = Color.LightGray,
-            fontSize = 11.sp,
-            maxLines = 1
-        )
-    }
-}
-@Composable
-fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Modifier = Modifier) {
-        Column(modifier = modifier.padding(horizontal = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                
-                )
-                drawArc(
-                    color = ringColor,
-                    startAngle = -90f, sweepAngle = 285f, useCenter = false,
-                    style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
-            Text(
-                text = value,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                maxLines = 1
-            )
-        }
-        Spacer(modifier = Modifier.height(5.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = label,
             color = Color.LightGray,
