@@ -704,16 +704,7 @@ fun HandSkeletonOverlay(metrics: GripMetrics) {
                     color = baseColor.copy(alpha = 0.45f),
                     radius = if (isFingertip) 14f else 16f,
                     center = center
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = if (isFingertip) 6f else 7f,
-                    center = center
-                )
-            }
-        }
-    }
-}
+
 @Composable
 fun HandSkeletonOverlay(metrics: GripMetrics) {
     val landmarks = metrics.landmarks
