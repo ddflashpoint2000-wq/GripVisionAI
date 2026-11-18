@@ -752,8 +752,7 @@ fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Mo
         )
     }
 }
-        Column(
-        modifier = modifier.padding(horizontal = 4.dp),
+        Column(modifier = modifier.padding(horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
