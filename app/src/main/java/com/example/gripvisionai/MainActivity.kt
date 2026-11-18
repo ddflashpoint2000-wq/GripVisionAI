@@ -752,6 +752,8 @@ fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Mo
         )
     }
 }
+@Composable
+fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Modifier = Modifier) {
         Column(modifier = modifier.padding(horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
