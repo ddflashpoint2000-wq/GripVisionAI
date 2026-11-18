@@ -759,10 +759,7 @@ fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Mo
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                drawArc(
-                    color = ringColor.copy(alpha = 0.25f),
-                    startAngle = 0f, sweepAngle = 360f, useCenter = false,
-                    style = Stroke(width = 7.dp.toPx())
+                
                 )
                 drawArc(
                     color = ringColor,
