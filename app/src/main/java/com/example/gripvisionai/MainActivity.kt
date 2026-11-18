@@ -222,11 +222,12 @@ class GripAnalyzer(
         val target = getGripTarget(sport, shot)
 
         // 1. 3D Palm Plane Normal Vector (Wrist 0 -> Index MCP 5 x Wrist 0 -> Pinky MCP 17)
-        val w = worldLandmarks[0]
-        val idxMcp = worldLandmarks[5]
-        val midMcp = worldLandmarks[9]
-        val pkyMcp = worldLandmarks[17]
-        val idxTip = worldLandmarks[8]
+                val w = worldLandmarks.get(0)
+        val idxMcp = worldLandmarks.get(5)
+        val midMcp = worldLandmarks.get(9)
+        val pkyMcp = worldLandmarks.get(17)
+        val idxTip = worldLandmarks.get(8)
+        
 
         val v1x = idxMcp.x() - w.x()
         val v1y = idxMcp.y() - w.y()
