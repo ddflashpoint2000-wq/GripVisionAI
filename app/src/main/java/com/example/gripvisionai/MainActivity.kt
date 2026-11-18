@@ -147,19 +147,20 @@ data class GripMetrics(
 )
 
 // ==========================================
-// 2. MEDIAPIPE GRIP ANALYZER ENGINE
+// 2. 3D MEDIAPIPE GRIP ANALYZER ENGINE
 // ==========================================
 
 class GripAnalyzer(
     context: Context,
     private val onMetricsUpdated: (GripMetrics) -> Unit
-) {
+    ){
     var sport: GripSport = GripSport.TENNIS
     var shot: ShotPreset = ShotPreset.SERVE_VOLLEY
     var isLeftHanded: Boolean = false
     var isFrozen: Boolean = false
 
     private var handLandmarker: HandLandmarker? = null
+    private var smoothedRollDeg: Float? = null
 
     init {
         try {
@@ -169,8 +170,15 @@ class GripAnalyzer(
 
             val options = HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(baseOptions)
-                .setRunningMode(RunningMode.IMAGE)
+                .setRunningMode(RunningMode.LIVE_STREAM)
                 .setNumHands(1)
+                .setMinHandDetectionConfidence(0.6f)
+                .setMinTrackingConfidence(0.6f)
+                .setResultListener { result, _ ->
+                    if (!isFrozen) {
+                        handleResult(result)
+                    }
+                }
                 .build()
 
             handLandmarker = HandLandmarker.createFromOptions(context, options)
@@ -180,71 +188,121 @@ class GripAnalyzer(
     }
 
     fun analyzeFrame(imageProxy: ImageProxy) {
-        if (isFrozen) {
+        if (isFrozen || handLandmarker == null) {
             imageProxy.close()
             return
         }
 
-        if (handLandmarker != null) {
-            try {
-                val bitmap = imageProxy.toBitmap()
-                val matrix = Matrix().apply {
-                    postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-                }
-                val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                val mpImage = BitmapImageBuilder(rotatedBitmap).build()
-
-                val result = handLandmarker?.detect(mpImage)
-                if (result != null && result.landmarks().isNotEmpty()) {
-                    val landmarks = result.landmarks()[0]
-                    val metrics = computeMetrics(landmarks, sport, shot, isLeftHanded)
-                    onMetricsUpdated(metrics)
-                } else {
-                    onMetricsUpdated(GripMetrics(coachingTip = "No hand detected. Center your grip inside the guide."))
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+        try {
+            val frameTime = android.os.SystemClock.uptimeMillis()
+            val bitmap = imageProxy.toBitmap()
+            val matrix = Matrix().apply {
+                postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
             }
+            val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            val mpImage = BitmapImageBuilder(rotatedBitmap).build()
+            handLandmarker?.detectAsync(mpImage, frameTime)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            imageProxy.close()
         }
-        imageProxy.close()
     }
 
-    private fun computeMetrics(
-        landmarks: List<NormalizedLandmark>,
-        sport: GripSport,
-        shot: ShotPreset,
-        isLeftHanded: Boolean
-    ): GripMetrics {
+    private fun handleResult(result: com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult) {
+        val screenLandmarks = result.landmarks().firstOrNull()
+        val worldLandmarks = result.worldLandmarks().firstOrNull()
+
+        if (screenLandmarks == null || worldLandmarks == null || worldLandmarks.size < 21) {
+            smoothedRollDeg = null
+            onMetricsUpdated(GripMetrics(coachingTip = "Center your hand and racket handle inside the green octagon."))
+            return
+        }
+
         val target = getGripTarget(sport, shot)
 
-        val wrist = landmarks[0]
-        val indexKnuckle = landmarks[5]
+        // 1. 3D Palm Plane Normal Vector (Wrist 0 -> Index MCP 5 x Wrist 0 -> Pinky MCP 17)
+        val w = worldLandmarks[0]
+        val idxMcp = worldLandmarks[5]
+        val midMcp = worldLandmarks[9]
+        val pkyMcp = worldLandmarks[17]
+        val idxTip = worldLandmarks[8]
 
-        val dx = indexKnuckle.x() - wrist.x()
-        val dy = indexKnuckle.y() - wrist.y()
-        val angleRad = atan2(dy.toDouble(), dx.toDouble())
-        var angleDeg = (angleRad * 180.0 / PI).toFloat()
-        if (isLeftHanded) angleDeg = -angleDeg
+        val v1x = idxMcp.x() - w.x()
+        val v1y = idxMcp.y() - w.y()
+        val v1z = idxMcp.z() - w.z()
 
-        val normalizedAngle = (angleDeg + 360f) % 360f
-        val calculatedBevel = ((normalizedAngle / 45f).toInt() % 8) + 1
+        val v2x = pkyMcp.x() - w.x()
+        val v2y = pkyMcp.y() - w.y()
+        val v2z = pkyMcp.z() - w.z()
 
-        val bevelMatch = calculatedBevel == target.targetBevel
-        val lockScore = if (bevelMatch) 92 else 55
+        // Cross product gives the 3D direction the palm is facing
+        val nx = v1y * v2z - v1z * v2y
+        val nz = v1x * v2y - v1y * v2x
 
-        val habitAlert = if (!bevelMatch && lockScore < 60) "Adjust knuckle position closer to Bevel ${target.targetBevel}" else null
-        val fingerSpreadStatus = if (landmarks.size > 20) "Relaxed" else "Tight"
+        // Calculate forearm roll angle in degrees (-180 to +180)
+        var rawRollDeg = (atan2(nx.toDouble(), nz.toDouble()) * 180.0 / PI).toFloat()
+        if (isLeftHanded) rawRollDeg = -rawRollDeg
 
-        return GripMetrics(
-            landmarks = landmarks,
-            lockScore = lockScore,
-            detectedBevel = "Bevel $calculatedBevel",
-            fingerSpreadStatus = fingerSpreadStatus,
-            habitAlert = habitAlert,
-            coachingTip = target.tip
+        // 2. Exponential Moving Average (EMA) Smoothing to stop jitter
+        val prev = smoothedRollDeg
+        val smoothDeg = if (prev == null) rawRollDeg else (0.30f * rawRollDeg + 0.70f * prev)
+        smoothedRollDeg = smoothDeg
+
+        // 3. Map smoothed 3D roll angle to Bevels 1–8 (each bevel = 45 degrees)
+        val normalized = (smoothDeg + 360f) % 360f
+        val detectedBevelNum = (((normalized + 22.5f) / 45f).toInt() % 8) + 1
+
+        // Shortest angular distance to target bevel angle
+        var angleDiff = abs(smoothDeg - target.targetAngleDeg) % 360f
+        if (angleDiff > 180f) angleDiff = 360f - angleDiff
+
+        val lockScore = (100f - (angleDiff * 0.85f)).toInt().coerceIn(25, 99)
+
+        // 4. 3D Bad-Habit Detection (Index Finger Up Paddle & Tight Death Grip)
+        val palmWidth = dist3D(idxMcp, pkyMcp).coerceAtLeast(0.01f)
+        val indexExtension = dist3D(idxMcp, idxTip) / palmWidth
+        val fingerSpread = dist3D(idxMcp, midMcp) / palmWidth
+
+        var habitAlert: String? = null
+        var fingerStatus = "Optimal"
+        var tip = target.tip
+
+        if (indexExtension > 1.75f) {
+            habitAlert = "INDEX FINGER UP PADDLE ALERT!"
+            fingerStatus = "Extended"
+            tip = "Wrap your index finger around the handle instead of pointing it up the face"
+        } else if (fingerSpread < 0.23f) {
+            habitAlert = "TIGHT DEATH GRIP ALERT!"
+            fingerStatus = "Tight"
+            tip = "Slide your index finger slightly up (trigger spread) to prevent tennis elbow"
+        } else if (lockScore < 78) {
+            val dir = if (smoothDeg < target.targetAngleDeg) "clockwise" else "counter-clockwise"
+            tip = "Rotate handle $dir (${angleDiff.toInt()}° off) to lock Bevel ${target.targetBevel} (${target.gripName})"
+        } else {
+            tip = "Locked on ${target.gripName} (Bevel ${target.targetBevel})! Clean 3D knuckle alignment"
+        }
+
+        onMetricsUpdated(
+            GripMetrics(
+                landmarks = screenLandmarks,
+                lockScore = lockScore,
+                detectedBevel = "Bevel $detectedBevelNum",
+                fingerSpreadStatus = fingerStatus,
+                habitAlert = habitAlert,
+                coachingTip = tip
+            )
         )
     }
+
+    private fun dist3D(a: NormalizedLandmark, b: NormalizedLandmark): Float {
+        val dx = a.x() - b.x()
+        val dy = a.y() - b.y()
+        val dz = a.z() - b.z()
+        return kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+    }
 }
+
 
 // ==========================================
 // 3. MAIN ACTIVITY & UI COMPOSABLES
@@ -335,52 +393,25 @@ fun GripVisionApp() {
         ) {
             // Header / Selectors
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    GripSport.values().forEach { sport ->
-                        Button(
-                            onClick = { selectedSport = sport },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (selectedSport == sport) Color(0xFF00FF88) else Color.DarkGray
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(sport.label, color = if (selectedSport == sport) Color.Black else Color.White, fontSize = 12.sp)
-                        }
-                    }
-                }
-            }
-
-            // Bottom Info Panel
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xCC10181C), RoundedCornerShape(16.dp))
-                    .padding(16.dp)
+                            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceAround
-                ) {
-                    GripMetricGauge(label = "Lock Score", value = "${metrics.lockScore}%", ringColor = Color(0xFF00FF88))
-                    GripMetricGauge(label = "Bevel", value = metrics.detectedBevel, ringColor = Color(0xFF00B4D8))
-                    GripMetricGauge(label = "Fingers", value = metrics.fingerSpreadStatus, ringColor = Color(0xFFFFB703))
+                GripSport.entries.forEach { sport ->
+                    FilterChip(
+                        selected = selectedSport == sport,
+                        onClick = { selectedSport = sport },
+                        label = { Text(sport.label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xAA121A1E),
+                            labelColor = Color.White,
+                            selectedContainerColor = Color(0xFF00FF88),
+                            selectedLabelColor = Color.Black
+                        )
+                    )
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = metrics.coachingTip,
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-    }
-}
+                            }
+                            
 
 @Composable
 fun CameraPreview(analyzer: GripAnalyzer) {
