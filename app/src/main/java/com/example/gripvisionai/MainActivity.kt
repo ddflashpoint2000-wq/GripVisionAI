@@ -866,7 +866,7 @@ fun HandSilhouetteOverlay(metrics: GripMetrics) {
             endY = topY + fadeSpan
         )
 
-        val lineBrush = Brush.verticalGradient(
+                val lineBrush = Brush.verticalGradient(
             0.0f to Color.White.copy(alpha = 0.96f),
             0.78f to Color.White.copy(alpha = 0.85f),
             1.0f to Color.Transparent,
@@ -874,22 +874,16 @@ fun HandSilhouetteOverlay(metrics: GripMetrics) {
             endY = topY + fadeSpan
         )
 
-        .y * palmSpan * 0.38f
-            ).x + tipDir.x * halfW * 0.72f, tip.y + tipDir.y * halfW * 0.72f)
-            contour.add(
-                Offset(
-                    tip.x + n3.x * halfW * 0.72f + tipDir.x * halfW * 0.35f,
-                    tip.y + n3.y * halfW * 0.72f + tipDir.y * halfW * 0.35f
-                )
+        drawPath(
+            path = smoothPath,
+            brush = glowBrush,
+            style = Stroke(
+                width = 8.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
             )
-            contour.add(tipCrown)
-            contour.add(
-                Offset(
-                    tip.x - n3.x * halfW * 0.72f + tipDir.x * halfW * 0.35f,
-                    tip.y - n3.y * halfW * 0.72f + tipDir.y * halfW * 0.35f
-                )
-            )
-
+        )
+        
             // Inner side going down
             contour.add(Offset(dip.x - n2.x * halfW * 0.88f, dip.y - n2.y * halfW * 0.88f))
             contour.add(Offset(pip.x - n1.x * halfW * 0.96f, pip.y - n1.y * halfW * 0.96f))
