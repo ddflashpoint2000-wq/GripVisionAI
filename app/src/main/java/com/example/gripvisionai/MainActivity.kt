@@ -150,6 +150,7 @@ data class GripMetrics(
     val habitAlert: String? = null,
     val coachingTip: String = "Hold your racket handle inside the octagon guide to scan"
 )
+
 // ==========================================
 // 2. 3D MEDIAPIPE GRIP ANALYZER ENGINE
 // ==========================================
@@ -225,12 +226,11 @@ class GripAnalyzer(
 
         val target = getGripTarget(sport, shot)
 
-                val w = worldLandmarks.get(0)
-        val idxMcp = worldLandmarks.get(5)
-        val midMcp = worldLandmarks.get(9)
-        val pkyMcp = worldLandmarks.get(17)
-        val idxTip = worldLandmarks.get(8)
-
+        val w = worldLandmarks[0]
+        val idxMcp = worldLandmarks[5]
+        val midMcp = worldLandmarks[9]
+        val pkyMcp = worldLandmarks[17]
+        val idxTip = worldLandmarks[8]
 
         val v1x = idxMcp.x() - w.x()
         val v1y = idxMcp.y() - w.y()
@@ -243,10 +243,9 @@ class GripAnalyzer(
         val nx = v1y * v2z - v1z * v2y
         val nz = v1x * v2y - v1y * v2x
 
-                var rawRollDeg = (atan2(nx.toDouble(), nz.toDouble()) * 180.0 / PI).toFloat() + 180f
+        var rawRollDeg = (atan2(nx.toDouble(), nz.toDouble()) * 180.0 / PI).toFloat() + 180f
         if (rawRollDeg > 180f) rawRollDeg -= 360f
         if (isLeftHanded) rawRollDeg = -rawRollDeg
-        
 
         val prev = smoothedRollDeg
         val smoothDeg = if (prev == null) rawRollDeg else (0.30f * rawRollDeg + 0.70f * prev)
@@ -320,6 +319,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
 // ==========================================
 // 4. MAIN CAMERA & CONTROLS UI
 // ==========================================
@@ -501,9 +501,27 @@ fun GripVisionApp() {
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            GripMetricGauge("Grip Lock", "${metrics.lockScore}%", Color(0xFF00FF88), Modifier.weight(1f))
-                            GripMetricGauge("Detected", metrics.detectedBevel, Color(0xFF00E5FF), Modifier.weight(1f))
-                            GripMetricGauge("Fingers", metrics.fingerSpreadStatus, Color(0xFF00E5FF), Modifier.weight(1f))
+                            GripMetricGauge(
+                                label = "Grip Lock",
+                                value = "${metrics.lockScore}%",
+                                ringColor = Color(0xFF00FF88),
+                                modifier = Modifier.weight(1f),
+                                progress = metrics.lockScore / 100f
+                            )
+                            GripMetricGauge(
+                                label = "Detected",
+                                value = metrics.detectedBevel,
+                                ringColor = Color(0xFF00E5FF),
+                                modifier = Modifier.weight(1f),
+                                progress = if (metrics.detectedBevel == "Bevel --") 0f else 1f
+                            )
+                            GripMetricGauge(
+                                label = "Fingers",
+                                value = metrics.fingerSpreadStatus,
+                                ringColor = if (metrics.habitAlert != null) Color(0xFFFF3B30) else Color(0xFF00E5FF),
+                                modifier = Modifier.weight(1f),
+                                progress = if (metrics.fingerSpreadStatus == "Ready") 0f else 0.85f
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -520,6 +538,7 @@ fun GripVisionApp() {
         }
     }
 }
+
 // ==========================================
 // 5. CAMERA PREVIEW, OCTAGON & GAUGES UI
 // ==========================================
@@ -617,93 +636,6 @@ fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean
         }
     }
 }
-
-@Composable
-fun HandSkeletonOverlay(metrics: GripMetrics) {
-    val landmarks = metrics.landmarks
-    if (landmarks.size < 21) return
-
-    val fingerChains = listOf(
-        listOf(0, 1, 2, 3, 4),
-        listOf(0, 5, 6, 7, 8),
-        listOf(9, 10, 11, 12),
-        listOf(13, 14, 15, 16),
-        listOf(0, 17, 18, 19, 20)
-    )
-
-    val palmIndices = listOf(0, 1, 5, 9, 13, 17)
-
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val baseColor = when {
-            metrics.habitAlert != null -> Color(0xFFFF3B30)
-            metrics.lockScore >= 80 -> Color(0xFF00FF88)
-            else -> Color(0xFF00E5FF)
-        }
-
-        fun pt(idx: Int) = Offset(
-            landmarks[idx].x() * size.width,
-            landmarks[idx].y() * size.height
-        )
-
-        // 1. Translucent Holographic Palm Mesh (Meta Quest VR style)
-        val palmPath = Path().apply {
-            val first = pt(palmIndices.first())
-            moveTo(first.x, first.y)
-            palmIndices.drop(1).forEach { idx ->
-                val p = pt(idx)
-                lineTo(p.x, p.y)
-            }
-            close()
-        }
-        drawPath(path = palmPath, color = baseColor.copy(alpha = 0.22f))
-        drawPath(path = palmPath, color = baseColor.copy(alpha = 0.65f), style = Stroke(width = 4f))
-
-        // 2. Tapered Translucent Finger Capsules + Inner Energy Core
-        fingerChains.forEach { chain ->
-            for (i in 0 until chain.size - 1) {
-                val start = pt(chain[i])
-                val end = pt(chain[i + 1])
-                val taperFactor = 1f - (i * 0.16f)
-
-                drawLine(
-                    color = baseColor.copy(alpha = 0.28f),
-                    start = start,
-                    end = end,
-                    strokeWidth = 34f * taperFactor,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = baseColor.copy(alpha = 0.85f),
-                    start = start,
-                    end = end,
-                    strokeWidth = 8f * taperFactor,
-                    cap = StrokeCap.Round
-                )
-            }
-        }
-
-        // 3. Concentric VR Joint Nodes + Yellow Index Knuckle Highlight (Landmark 5)
-        landmarks.forEachIndexed { idx, _ ->
-            val center = pt(idx)
-            val isIndexKnuckle = idx == 5
-            val isFingertip = idx in listOf(4, 8, 12, 16, 20)
-
-            if (isIndexKnuckle) {
-                drawCircle(
-                    color = Color(0xFFFFEE00).copy(alpha = 0.35f),
-                    radius = 28f,
-                    center = center
-                )
-                drawCircle(
-                    color = Color(0xFFFFEE00),
-                    radius = 14f,
-                    center = center
-                )
-            } else {
-                drawCircle(
-                    color = baseColor.copy(alpha = 0.45f),
-                    radius = if (isFingertip) 14f else 16f,
-                    center = center
 
 @Composable
 fun HandSkeletonOverlay(metrics: GripMetrics) {
