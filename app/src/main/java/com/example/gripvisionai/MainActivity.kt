@@ -582,3 +582,38 @@ fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Mo
         )
     }
 }
+@Composable
+fun HandSkeletonOverlay(metrics: GripMetrics) {
+    val landmarks = metrics.landmarks
+    if (landmarks.isEmpty()) return
+
+    val connections = listOf(
+        0 to 1, 1 to 2, 2 to 3, 3 to 4,
+        0 to 5, 5 to 6, 6 to 7, 7 to 8,
+        5 to 9, 9 to 10, 10 to 11, 11 to 12,
+        9 to 13, 13 to 14, 14 to 15, 15 to 16,
+        13 to 17, 17 to 18, 18 to 19, 19 to 20,
+        0 to 17
+    )
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val lineColor = if (metrics.habitAlert == null) Color(0xFF00FF88) else Color(0xFFFF3B30)
+
+        connections.forEach { (a, b) ->
+            if (a < landmarks.size && b < landmarks.size) {
+                val start = Offset(landmarks.get(a).x() * size.width, landmarks.get(a).y() * size.height)
+                val end = Offset(landmarks.get(b).x() * size.width, landmarks.get(b).y() * size.height)
+                drawLine(color = lineColor, start = start, end = end, strokeWidth = 8f, cap = StrokeCap.Round)
+            }
+        }
+
+        landmarks.forEachIndexed { idx, pt ->
+            val isIndexKnuckle = idx == 5
+            drawCircle(
+                color = if (isIndexKnuckle) Color(0xFFFFEE00) else Color.White,
+                radius = if (isIndexKnuckle) 16f else 9f,
+                center = Offset(pt.x() * size.width, pt.y() * size.height)
+            )
+        }
+    }
+}
