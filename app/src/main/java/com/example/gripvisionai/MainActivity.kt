@@ -27,10 +27,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -51,6 +54,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -513,14 +517,14 @@ fun GripVisionApp() {
                                 value = metrics.detectedBevel,
                                 ringColor = Color(0xFF00E5FF),
                                 modifier = Modifier.weight(1f),
-                                progress = if (metrics.detectedBevel == "Bevel --") 0f else 1f
+                                progress = 0.85f
                             )
                             GripMetricGauge(
                                 label = "Fingers",
                                 value = metrics.fingerSpreadStatus,
-                                ringColor = if (metrics.habitAlert != null) Color(0xFFFF3B30) else Color(0xFF00E5FF),
+                                ringColor = Color(0xFF00E5FF),
                                 modifier = Modifier.weight(1f),
-                                progress = if (metrics.fingerSpreadStatus == "Ready") 0f else 0.85f
+                                progress = 0.85f
                             )
                         }
 
@@ -642,96 +646,214 @@ fun HandSkeletonOverlay(metrics: GripMetrics) {
     val landmarks = metrics.landmarks
     if (landmarks.size < 21) return
 
-    val fingerChains = listOf(
-        listOf(0, 1, 2, 3, 4),
-        listOf(0, 5, 6, 7, 8),
-        listOf(9, 10, 11, 12),
-        listOf(13, 14, 15, 16),
-        listOf(0, 17, 18, 19, 20)
-    )
-
-    val palmIndices = listOf(0, 1, 5, 9, 13, 17)
-
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val baseColor = when {
-            metrics.habitAlert != null -> Color(0xFFFF3B30)
-            metrics.lockScore >= 80 -> Color(0xFF00FF88)
-            else -> Color(0xFF00E5FF)
-        }
-
         fun pt(idx: Int) = Offset(
             landmarks[idx].x() * size.width,
             landmarks[idx].y() * size.height
         )
 
-        // 1. Translucent Holographic Palm Mesh (Meta Quest VR style)
-        val palmPath = Path().apply {
-            val first = pt(palmIndices.first())
-            moveTo(first.x, first.y)
-            palmIndices.drop(1).forEach { idx ->
-                val p = pt(idx)
-                lineTo(p.x, p.y)
+        val wrist = pt(0)
+        val idxMcp = pt(5)
+        val pkyMcp = pt(17)
+        val palmSpan = hypot(idxMcp.x - pkyMcp.x, idxMcp.y - pkyMcp.y).coerceAtLeast(36f)
+
+        val outlineColor = when {
+            metrics.habitAlert != null -> Color(0xFFFF6B6B)
+            metrics.lockScore >= 80 -> Color(0xFFE8FFF4)
+            else -> Color.White
+        }
+
+        val wristFadeBrush = Brush.verticalGradient(
+            colors = listOf(
+                outlineColor.copy(alpha = 0.95f),
+                outlineColor.copy(alpha = 0.95f),
+                outlineColor.copy(alpha = 0.0f)
+            ),
+            startY = minOf(idxMcp.y, pkyMcp.y) - palmSpan * 0.2f,
+            endY = wrist.y + palmSpan * 0.55f
+        )
+
+        // Build clean outer silhouette contour of the hand (Meta Quest passthrough outline style)
+        val contourPoints = mutableListOf<Offset>()
+
+        fun addFingerSilhouette(chain: List<Int>, baseHalfWidth: Float, tipHalfWidth: Float) {
+            val pts = chain.map { pt(it) }
+            val leftSide = mutableListOf<Offset>()
+            val rightSide = mutableListOf<Offset>()
+
+            for (i in 0 until pts.size - 1) {
+                val a = pts[i]
+                val b = pts[i + 1]
+                val dx = b.x - a.x
+                val dy = b.y - a.y
+                val len = hypot(dx, dy).coerceAtLeast(1f)
+                val nx = -dy / len
+                val ny = dx / len
+
+                val t0 = i.toFloat() / (pts.size - 1)
+                val t1 = (i + 1).toFloat() / (pts.size - 1)
+                val w0 = baseHalfWidth + (tipHalfWidth - baseHalfWidth) * t0
+                val w1 = baseHalfWidth + (tipHalfWidth - baseHalfWidth) * t1
+
+                leftSide.add(Offset(a.x + nx * w0, a.y + ny * w0))
+                leftSide.add(Offset(b.x + nx * w1, b.y + ny * w1))
+                rightSide.add(Offset(a.x - nx * w0, a.y - ny * w0))
+                rightSide.add(Offset(b.x - nx * w1, b.y - ny * w1))
             }
+
+            // Rounded fingertip arc
+            val preTip = pts[pts.size - 2]
+            val tip = pts.last()
+            val dirAngle = atan2(tip.y - preTip.y, tip.x - preTip.x)
+            val tipCap = mutableListOf<Offset>()
+            for (step in -2..2) {
+                val ang = dirAngle + step * (PI / 5.0).toFloat()
+                tipCap.add(Offset(tip.x + cos(ang) * tipHalfWidth, tip.y + sin(ang) * tipHalfWidth))
+            }
+
+            contourPoints.addAll(leftSide)
+            contourPoints.addAll(tipCap)
+            contourPoints.addAll(rightSide.asReversed())
+        }
+
+        // Determine winding order so outer edges stay on the exterior for both left and right hands
+        val cross = (idxMcp.x - wrist.x) * (pkyMcp.y - wrist.y) - (idxMcp.y - wrist.y) * (pkyMcp.x - wrist.x)
+        val isClockwise = cross > 0f
+
+        val wristOffset = Offset(
+            (wrist.x - (idxMcp.x + pkyMcp.x) * 0.5f) * 0.55f,
+            (wrist.y - (idxMcp.y + pkyMcp.y) * 0.5f) * 0.55f
+        )
+        val thumbWristEdge = Offset(
+            wrist.x + (idxMcp.x - pkyMcp.x) * 0.28f + wristOffset.x,
+            wrist.y + (idxMcp.y - pkyMcp.y) * 0.28f + wristOffset.y
+        )
+        val pinkyWristEdge = Offset(
+            wrist.x - (idxMcp.x - pkyMcp.x) * 0.28f + wristOffset.x,
+            wrist.y - (idxMcp.y - pkyMcp.y) * 0.28f + wristOffset.y
+        )
+
+        val fingerSpecs = listOf(
+            Triple(listOf(1, 2, 3, 4), palmSpan * 0.16f, palmSpan * 0.11f),
+            Triple(listOf(5, 6, 7, 8), palmSpan * 0.135f, palmSpan * 0.09f),
+            Triple(listOf(9, 10, 11, 12), palmSpan * 0.14f, palmSpan * 0.095f),
+            Triple(listOf(13, 14, 15, 16), palmSpan * 0.13f, palmSpan * 0.088f),
+            Triple(listOf(17, 18, 19, 20), palmSpan * 0.115f, palmSpan * 0.078f)
+        )
+
+        // Construct continuous outer hand contour from wrist -> thumb -> fingers -> pinky -> wrist
+        val rawPathPoints = mutableListOf<Offset>()
+        rawPathPoints.add(thumbWristEdge)
+        rawPathPoints.add(pt(1))
+
+        for ((chain, baseW, tipW) in fingerSpecs) {
+            val pts = chain.map { pt(it) }
+            val sideA = mutableListOf<Offset>()
+            val sideB = mutableListOf<Offset>()
+
+            for (i in 0 until pts.size - 1) {
+                val a = pts[i]
+                val b = pts[i + 1]
+                val dx = b.x - a.x
+                val dy = b.y - a.y
+                val len = hypot(dx, dy).coerceAtLeast(1f)
+                val nx = if (isClockwise) -dy / len else dy / len
+                val ny = if (isClockwise) dx / len else -dx / len
+
+                val t0 = i.toFloat() / (pts.size - 1)
+                val t1 = (i + 1).toFloat() / (pts.size - 1)
+                val w0 = baseW + (tipW - baseW) * t0
+                val w1 = baseW + (tipW - baseW) * t1
+
+                sideA.add(Offset(a.x + nx * w0, a.y + ny * w0))
+                sideA.add(Offset(b.x + nx * w1, b.y + ny * w1))
+                sideB.add(Offset(a.x - nx * w0, a.y - ny * w0))
+                sideB.add(Offset(b.x - nx * w1, b.y - ny * w1))
+            }
+
+            val preTip = pts[pts.size - 2]
+            val tip = pts.last()
+            val dirAngle = atan2(tip.y - preTip.y, tip.x - preTip.x)
+            val sign = if (isClockwise) -1f else 1f
+            val tipArc = (-2..2).map { step ->
+                val ang = dirAngle + sign * step * (PI / 5.0).toFloat()
+                Offset(tip.x + cos(ang) * tipW, tip.y + sin(ang) * tipW)
+            }
+
+            rawPathPoints.addAll(sideA)
+            rawPathPoints.addAll(tipArc)
+            rawPathPoints.addAll(sideB.asReversed())
+        }
+
+        rawPathPoints.add(pinkyWristEdge)
+
+        // Smooth the outer contour with quadratic Bezier midpoints for crisp, organic line art
+        val smoothPath = buildSmoothOpenPath(rawPathPoints)
+
+        // Subtle soft dark-glass interior tint so white outline pops cleanly over any background
+        val closedFillPath = Path().apply {
+            addPath(smoothPath)
             close()
         }
-        drawPath(path = palmPath, color = baseColor.copy(alpha = 0.22f))
-        drawPath(path = palmPath, color = baseColor.copy(alpha = 0.65f), style = Stroke(width = 4f))
+        drawPath(
+            path = closedFillPath,
+            color = Color(0xFF10181C).copy(alpha = 0.16f)
+        )
 
-        // 2. Tapered Translucent Finger Capsules + Inner Energy Core
-        fingerChains.forEach { chain ->
-            for (i in 0 until chain.size - 1) {
-                val start = pt(chain[i])
-                val end = pt(chain[i + 1])
-                val taperFactor = 1f - (i * 0.16f)
+        // Outer soft glow halo
+        drawPath(
+            path = smoothPath,
+            brush = wristFadeBrush,
+            style = Stroke(
+                width = 9.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            ),
+            alpha = 0.22f
+        )
 
-                drawLine(
-                    color = baseColor.copy(alpha = 0.28f),
-                    start = start,
-                    end = end,
-                    strokeWidth = 34f * taperFactor,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = baseColor.copy(alpha = 0.85f),
-                    start = start,
-                    end = end,
-                    strokeWidth = 8f * taperFactor,
-                    cap = StrokeCap.Round
-                )
-            }
-        }
+        // Crisp continuous white hand silhouette outline (matching Meta Quest / VR hand outline)
+        drawPath(
+            path = smoothPath,
+            brush = wristFadeBrush,
+            style = Stroke(
+                width = 3.2.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
 
-        // 3. Concentric VR Joint Nodes + Yellow Index Knuckle Highlight (Landmark 5)
-        landmarks.forEachIndexed { idx, _ ->
-            val center = pt(idx)
-            val isIndexKnuckle = idx == 5
-            val isFingertip = idx in listOf(4, 8, 12, 16, 20)
-
-            if (isIndexKnuckle) {
-                drawCircle(
-                    color = Color(0xFFFFEE00).copy(alpha = 0.35f),
-                    radius = 28f,
-                    center = center
-                )
-                drawCircle(
-                    color = Color(0xFFFFEE00),
-                    radius = 14f,
-                    center = center
-                )
-            } else {
-                drawCircle(
-                    color = baseColor.copy(alpha = 0.45f),
-                    radius = if (isFingertip) 14f else 16f,
-                    center = center
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = if (isFingertip) 6f else 7f,
-                    center = center
-                )
-            }
-        }
+        // Subtle Index Knuckle (Landmark 5) anchor ring so user still sees bevel alignment point
+        val knucklePt = idxMcp
+        drawCircle(
+            color = Color(0xFFFFEE00).copy(alpha = 0.28f),
+            radius = 16.dp.toPx(),
+            center = knucklePt
+        )
+        drawCircle(
+            color = Color(0xFFFFEE00),
+            radius = 5.dp.toPx(),
+            center = knucklePt
+        )
     }
+}
+
+private fun buildSmoothOpenPath(points: List<Offset>): Path {
+    val path = Path()
+    if (points.isEmpty()) return path
+    path.moveTo(points.first().x, points.first().y)
+    if (points.size == 1) return path
+
+    for (i in 1 until points.size - 1) {
+        val current = points[i]
+        val next = points[i + 1]
+        val midX = (current.x + next.x) / 2f
+        val midY = (current.y + next.y) / 2f
+        path.quadraticBezierTo(current.x, current.y, midX, midY)
+    }
+    val last = points.last()
+    path.lineTo(last.x, last.y)
+    return path
 }
 
 @Composable
