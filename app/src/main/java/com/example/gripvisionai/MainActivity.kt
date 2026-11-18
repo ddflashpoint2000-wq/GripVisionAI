@@ -92,7 +92,7 @@ fun getGripTarget(sport: GripSport, shot: ShotPreset): GripTarget {
                 targetAngleDeg = 45f,
                 tip = "Rotate index knuckle to Bevel 4 (bottom-right) for heavy topspin"
             )
-            ShotPreset.BACKHAND_DINK -> GripTarget(
+            ShotPreset.BACKHAND -> GripTarget(
                 gripName = "Eastern Backhand",
                 targetBevel = 1,
                 targetAngleDeg = -90f,
@@ -112,7 +112,7 @@ fun getGripTarget(sport: GripSport, shot: ShotPreset): GripTarget {
                 targetAngleDeg = -45f,
                 tip = "Keep Continental Bevel 2 for fast wall rebounds and quick volleys"
             )
-            ShotPreset.BACKHAND_DINK -> GripTarget(
+            ShotPreset.BACKHAND -> GripTarget(
                 gripName = "Continental",
                 targetBevel = 2,
                 targetAngleDeg = -45f,
@@ -718,6 +718,40 @@ fun HandSkeletonOverlay(metrics: GripMetrics) {
 
 @Composable
 fun GripMetricGauge(label: String, value: String, ringColor: Color, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawArc(
+                    color = ringColor.copy(alpha = 0.25f),
+                    startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                    style = Stroke(width = 7.dp.toPx())
+                )
+                drawArc(
+                    color = ringColor,
+                    startAngle = -90f, sweepAngle = 285f, useCenter = false,
+                    style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
+                )
+            }
+            Text(
+                text = value,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                maxLines = 1
+            )
+        }
+        Spacer(modifier = Modifier.height(5.dp))
+        Text(
+            text = label,
+            color = Color.LightGray,
+            fontSize = 11.sp,
+            maxLines = 1
+        )
+    }
+}
     Column(
         modifier = modifier.padding(horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
