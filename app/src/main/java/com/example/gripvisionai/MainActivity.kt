@@ -19,9 +19,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -36,7 +34,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -149,6 +149,7 @@ fun getGripTarget(sport: GripSport, shot: ShotPreset): GripTarget {
 
 data class GripMetrics(
     val landmarks: List<NormalizedLandmark> = emptyList(),
+    val worldLandmarks: List<Landmark> = emptyList(),
     val imageWidth: Int = 0,
     val imageHeight: Int = 0,
     val lockScore: Int = 0,
@@ -157,7 +158,6 @@ data class GripMetrics(
     val habitAlert: String? = null,
     val coachingTip: String = "Hold your racket handle inside the octagon guide to scan"
 )
-
 // ==========================================
 // 2. 3D MEDIAPIPE GRIP ANALYZER ENGINE
 // ==========================================
@@ -249,10 +249,11 @@ class GripAnalyzer(
         val target = getGripTarget(sport, shot)
 
         val w = worldLandmarks[0]
-        val idxMcp = worldLandmarks[5]
-        val midMcp = worldLandmarks[9]
-        val pkyMcp = worldLandmarks[17]
-        val idxTip = worldLandmarks[8]
+val idxMcp = worldLandmarks[5]
+val midMcp = worldLandmarks[9]
+val pkyMcp = worldLandmarks[17]
+val idxTip = worldLandmarks[8]
+        
 
         val v1x = idxMcp.x() - w.x()
         val v1y = idxMcp.y() - w.y()
@@ -307,6 +308,7 @@ class GripAnalyzer(
         onMetricsUpdated(
             GripMetrics(
                 landmarks = screenLandmarks,
+                worldLandmarks = worldLandmarks,
                 imageWidth = lastFrameWidth,
                 imageHeight = lastFrameHeight,
                 lockScore = lockScore,
@@ -324,8 +326,16 @@ class GripAnalyzer(
         val dz = a.z() - b.z()
         return sqrt(dx * dx + dy * dy + dz * dz)
     }
-}
 
+    fun close() {
+        try {
+            handLandmarker?.close()
+            handLandmarker = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
 // ==========================================
 // 3. MAIN ACTIVITY ENTRY POINT
 // ==========================================
@@ -351,6 +361,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun GripVisionApp() {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -374,11 +386,27 @@ fun GripVisionApp() {
     var isLeftHanded by remember { mutableStateOf(false) }
     var isFrozen by remember { mutableStateOf(false) }
     var metrics by remember { mutableStateOf(GripMetrics()) }
+    var wasLocked by remember { mutableStateOf(false) }
 
     val analyzer = remember {
         GripAnalyzer(context) { newMetrics ->
             metrics = newMetrics
         }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            analyzer.close()
+        }
+    }
+
+    // Haptic pulse when user locks onto the target bevel
+    val isCurrentlyLocked = metrics.lockScore >= 82 && metrics.habitAlert == null && metrics.landmarks.isNotEmpty()
+    LaunchedEffect(isCurrentlyLocked) {
+        if (isCurrentlyLocked && !wasLocked) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        wasLocked = isCurrentlyLocked
     }
 
     analyzer.sport = selectedSport
@@ -407,12 +435,13 @@ fun GripVisionApp() {
             targetBevel = getGripTarget(selectedSport, selectedShot).targetBevel,
             isLeftHanded = isLeftHanded
         )
-        HandSilhouetteOverlay(metrics = metrics)
+
+        Quest3DHandOverlay(metrics = metrics)
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column(modifier = Modifier.statusBarsPadding()) {
@@ -440,18 +469,23 @@ fun GripVisionApp() {
                     )
                 }
 
+                // Equal-width Sport chips so labels never clip
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
                         .padding(top = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     GripSport.entries.forEach { sport ->
                         FilterChip(
+                            modifier = Modifier.weight(1f),
                             selected = selectedSport == sport,
                             onClick = { selectedSport = sport },
-                            label = { Text(sport.label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1) },
+                            label = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text(sport.label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                }
+                            },
                             colors = FilterChipDefaults.filterChipColors(
                                 containerColor = Color(0xAA121A1E),
                                 labelColor = Color.White,
@@ -462,18 +496,23 @@ fun GripVisionApp() {
                     }
                 }
 
+                // Equal-width Shot chips so "Backhand" never clips
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
                         .padding(top = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     ShotPreset.entries.forEach { shot ->
                         FilterChip(
+                            modifier = Modifier.weight(1f),
                             selected = selectedShot == shot,
                             onClick = { selectedShot = shot },
-                            label = { Text(shot.label, fontSize = 11.sp, maxLines = 1) },
+                            label = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text(shot.label, fontSize = 10.5.sp, maxLines = 1)
+                                }
+                            },
                             colors = FilterChipDefaults.filterChipColors(
                                 containerColor = Color(0xAA121A1E),
                                 labelColor = Color.LightGray,
@@ -503,11 +542,16 @@ fun GripVisionApp() {
             }
 
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Button(
-                    onClick = { isFrozen = !isFrozen },
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        isFrozen = !isFrozen
+                    },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isFrozen) Color(0xFF00E5FF) else Color(0xFF00FF88)
                     ),
@@ -536,41 +580,43 @@ fun GripVisionApp() {
                                 value = "${metrics.lockScore}%",
                                 ringColor = Color(0xFF00FF88),
                                 modifier = Modifier.weight(1f),
-                                progress = metrics.lockScore / 100f
-                            )
-                            GripMetricGauge(
-                                label = "Detected",
-                                value = metrics.detectedBevel,
-                                ringColor = Color(0xFF00E5FF),
-                                modifier = Modifier.weight(1f),
-                                progress = if (metrics.landmarks.isNotEmpty()) 1f else 0.15f
-                            )
-                            GripMetricGauge(
-                                label = "Fingers",
-                                value = metrics.fingerSpreadStatus,
-                                ringColor = if (metrics.habitAlert != null) Color(0xFFFF3B30) else Color(0xFF00E5FF),
-                                modifier = Modifier.weight(1f),
-                                progress = if (metrics.fingerSpreadStatus == "Optimal") 1f else 0.45f
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = metrics.coachingTip,
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            lineHeight = 19.sp
-                        )
-                    }
-                }
-            }
-        }
-    }
+progress = metrics.lockScore / 100f
+)
+GripMetricGauge(
+label = "Detected",
+value = metrics.detectedBevel,
+ringColor = Color(0xFF00E5FF),
+modifier = Modifier.weight(1f),
+progress = if (metrics.landmarks.isNotEmpty()) 1f else 0.15f
+)
+GripMetricGauge(
+label = "Fingers",
+value = metrics.fingerSpreadStatus,
+ringColor = if (metrics.habitAlert != null) Color(0xFFFF3B30) else Color(0xFF00E5FF),
+modifier = Modifier.weight(1f),
+progress = if (metrics.fingerSpreadStatus == "Optimal") 1f else 0.45f
+)
 }
+Spacer(modifier = Modifier.height(12.dp))
+Text(
+text = metrics.coachingTip,
+color = Color.White,
+fontSize = 14.sp,
+lineHeight = 19.sp
+)
+}
+}
+}
+}
+}
+}
+---
 
+### Part 4 of 5: Camera Preview & Octagon Handle Guide
+
+```kotlin
 // ==========================================
-// 5. CAMERA PREVIEW, OCTAGON, SILHOUETTE & GAUGES UI
+// 5. CAMERA PREVIEW & OCTAGON HANDLE GUIDE
 // ==========================================
 
 @Composable
@@ -622,8 +668,8 @@ fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean
     Box(modifier = Modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val cx = size.width / 2f
-            val cy = size.height / 2f
-            val radius = 120f
+            val cy = size.height * 0.46f
+            val radius = 115f
 
             val path = Path()
             for (i in 0 until 8) {
@@ -658,7 +704,7 @@ fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(y = (-135).dp)
+                .offset(y = (-145).dp)
                 .background(Color(0xBB10181C), RoundedCornerShape(20.dp))
                 .padding(horizontal = 14.dp, vertical = 6.dp)
         ) {
@@ -671,17 +717,28 @@ fun OctagonHandleGuide(gripName: String, targetBevel: Int, isLeftHanded: Boolean
         }
     }
 }
+// ==========================================
+// 6. META QUEST 3 VOLUMETRIC HAND MESH & GAUGES
+// ==========================================
+
+private data class BoneSegment3D(
+    val a: Offset,
+    val b: Offset,
+    val zDepth: Float,
+    val radiusA: Float,
+    val radiusB: Float
+)
 
 @Composable
-fun HandSilhouetteOverlay(metrics: GripMetrics) {
+fun Quest3DHandOverlay(metrics: GripMetrics) {
     val landmarks = metrics.landmarks
-    if (landmarks.size < 21) return
+    val world = metrics.worldLandmarks
+    if (landmarks.size < 21 || world.size < 21) return
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val imgW = if (metrics.imageWidth > 0) metrics.imageWidth.toFloat() else size.width
         val imgH = if (metrics.imageHeight > 0) metrics.imageHeight.toFloat() else size.height
 
-        // Exact FILL_CENTER coordinate mapping matching PreviewView
         val scale = max(size.width / imgW, size.height / imgH)
         val scaledW = imgW * scale
         val scaledH = imgH * scale
@@ -693,14 +750,10 @@ fun HandSilhouetteOverlay(metrics: GripMetrics) {
             landmarks[idx].y() * scaledH + offsetY
         )
 
-        fun perp(a: Offset, b: Offset): Offset {
-            val dx = b.x - a.x
-            val dy = b.y - a.y
-            val len = hypot(dx, dy).coerceAtLeast(0.001f)
-            return Offset(-dy / len, dx / len)
-        }
+        fun zAt(idx: Int): Float = world[idx].z()
 
-        fun hypot(dx: Float, dy: Float): Float = sqrt(dx * dx + dy * dy)
+        fun dist(a: Offset, b: Offset): Float =
+            sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)).coerceAtLeast(1f)
 
         fun lerp(a: Offset, b: Offset, t: Float) = Offset(
             a.x + (b.x - a.x) * t,
@@ -709,227 +762,182 @@ fun HandSilhouetteOverlay(metrics: GripMetrics) {
 
         val wrist = pt(0)
         val indexMcp = pt(5)
+        val middleMcp = pt(9)
         val pinkyMcp = pt(17)
-        val palmSpan = hypot(indexMcp.x - pinkyMcp.x, indexMcp.y - pinkyMcp.y).coerceAtLeast(30f)
+        val palmSpan = dist(indexMcp, pinkyMcp).coerceAtLeast(32f)
 
-        // Ensure outward normal always points away from palm center regardless of left/right hand
-        val palmCenter = Offset(
-            (wrist.x + indexMcp.x + pinkyMcp.x) / 3f,
-            (wrist.y + indexMcp.y + pinkyMcp.y) / 3f
+        val rimTint = when {
+            metrics.habitAlert != null -> Color(0xFFFF453A)
+            metrics.lockScore >= 78 -> Color(0xFF64FFDA)
+            else -> Color(0xFFB8E8FF)
+        }
+
+        // 1. Holographic Forearm Cuff with Transparency Fade
+        val midKnuckle = lerp(indexMcp, pinkyMcp, 0.5f)
+        val armLen = dist(midKnuckle, wrist)
+        val downArm = Offset((wrist.x - midKnuckle.x) / armLen, (wrist.y - midKnuckle.y) / armLen)
+        val cuffEnd = Offset(wrist.x + downArm.x * palmSpan * 0.65f, wrist.y + downArm.y * palmSpan * 0.65f)
+        val cuffPerp = Offset(-downArm.y, downArm.x)
+
+        val cuffPath = Path().apply {
+            moveTo(wrist.x + cuffPerp.x * palmSpan * 0.36f, wrist.y + cuffPerp.y * palmSpan * 0.36f)
+            lineTo(cuffEnd.x + cuffPerp.x * palmSpan * 0.33f, cuffEnd.y + cuffPerp.y * palmSpan * 0.33f)
+            lineTo(cuffEnd.x - cuffPerp.x * palmSpan * 0.33f, cuffEnd.y - cuffPerp.y * palmSpan * 0.33f)
+            lineTo(wrist.x - cuffPerp.x * palmSpan * 0.36f, wrist.y - cuffPerp.y * palmSpan * 0.36f)
+            close()
+        }
+
+        val cuffFadeBrush = Brush.linearGradient(
+            0.0f to rimTint.copy(alpha = 0.22f),
+            1.0f to Color.Transparent,
+            start = wrist,
+            end = cuffEnd
         )
-        val rawWristDir = perp(wrist, pt(9))
-        val toPinky = Offset(pinkyMcp.x - palmCenter.x, pinkyMcp.y - palmCenter.y)
-        val sign = if (rawWristDir.x * toPinky.x + rawWristDir.y * toPinky.y >= 0f) 1f else -1f
+        drawPath(path = cuffPath, brush = cuffFadeBrush)
 
-        fun outNormal(a: Offset, b: Offset): Offset {
-            val n = perp(a, b)
-            return Offset(n.x * sign, n.y * sign)
-        }
-
-        // Anatomical finger half-widths scaled to actual hand size
-        val wThumb = palmSpan * 0.145f
-        val wIndex = palmSpan * 0.125f
-        val wMiddle = palmSpan * 0.130f
-        val wRing = palmSpan * 0.122f
-        val wPinky = palmSpan * 0.105f
-
-        // Build outer boundary points following the real skin edge of the hand
-        val contour = mutableListOf<Offset>()
-
-        // 1. Ulnar forearm/wrist entry -> outer heel of palm -> pinky base
-        val wristDir = Offset(pt(9).x - wrist.x, pt(9).y - wrist.y)
-        val wristLen = hypot(wristDir.x, wristDir.y).coerceAtLeast(1f)
-        val downArm = Offset(-wristDir.x / wristLen, -wristDir.y / wristLen)
-        val ulnarSide = outNormal(wrist, pinkyMcp)
-        val radialSide = Offset(-ulnarSide.x, -ulnarSide.y)
-
-        contour.add(Offset(wrist.x + ulnarSide.x * palmSpan * 0.34f + downArm.x * palmSpan * 0.55f,
-                           wrist.y + ulnarSide.y * palmSpan * 0.34f + downArm.y * palmSpan * 0.55f))
-        contour.add(Offset(wrist.x + ulnarSide.x * palmSpan * 0.38f,
-                           wrist.y + ulnarSide.y * palmSpan * 0.38f))
-        contour.add(Offset(pinkyMcp.x + ulnarSide.x * (wPinky * 1.15f),
-                           pinkyMcp.y + ulnarSide.y * (wPinky * 1.15f)))
-
-        // Helper to trace a finger from base -> outer edge -> rounded tip -> inner edge
-        fun addFinger(mcpIdx: Int, pipIdx: Int, dipIdx: Int, tipIdx: Int, halfW: Float) {
-            val mcp = pt(mcpIdx)
-            val pip = pt(pipIdx)
-            val dip = pt(dipIdx)
-            val tip = pt(tipIdx)
-
-            val n1 = outNormal(mcp, pip)
-            val n2 = outNormal(pip, dip)
-            val n3 = outNormal(dip, tip)
-
-            val axis = Offset(tip.x - dip.x, tip.y - dip.y)
-            val axisLen = hypot(axis.x, axis.y).coerceAtLeast(1f)
-            val tipDir = Offset(axis.x / axisLen, axis.y / axisLen)
-
-            // Outer side going up
-            contour.add(Offset(pip.x + n1.x * halfW * 0.96f, pip.y + n1.y * halfW * 0.96f))
-            contour.add(Offset(dip.x + n2.x * halfW * 0.88f, dip.y + n2.y * halfW * 0.88f))
-
-            // Smooth rounded fingertip arc
-            val tipCrown = Offset(tip.x + tipDir.x * halfW * 0.72f, tip.y + tipDir.y * halfW * 0.72f)
-            contour.add(Offset(tip.x + n3.x * halfW * 0.72f + tipDir.x * halfW * 0.35f,
-                               tip.y + n3.y * halfW * 0.72f + tipDir.y * halfW * 0.35f))
-            contour.add(tipCrown)
-            contour.add(Offset(tip.x - n3.x * halfW * 0.72f + tipDir.x * halfW * 0.35f,
-                               tip.y - n3.y * halfW * 0.72f + tipDir.y * halfW * 0.35f))
-
-            // Inner side going down
-            contour.add(Offset(dip.x - n2.x * halfW * 0.88f, dip.y - n2.y * halfW * 0.88f))
-            contour.add(Offset(pip.x - n1.x * halfW * 0.96f, pip.y - n1.y * halfW * 0.96f))
-        }
-
-        // Finger webbing valley sits ~28% up from MCP toward PIP (real anatomical web height)
-        fun addWebbing(mcpA: Int, pipA: Int, mcpB: Int, pipB: Int) {
-            val webA = lerp(pt(mcpA), pt(pipA), 0.26f)
-            val webB = lerp(pt(mcpB), pt(pipB), 0.26f)
-            contour.add(lerp(webA, webB, 0.5f))
-        }
-
-        // 2. Pinky -> Ring -> Middle -> Index with high anatomical webbing valleys
-        addFinger(17, 18, 19, 20, wPinky)
-        addWebbing(17, 18, 13, 14)
-
-        addFinger(13, 14, 15, 16, wRing)
-        addWebbing(13, 14, 9, 10)
-
-        addFinger(9, 10, 11, 12, wMiddle)
-        addWebbing(9, 10, 5, 6)
-
-        addFinger(5, 6, 7, 8, wIndex)
-
-        // 3. Radial side of Index -> Thumb saddle (purlicue) -> Thumb -> Radial wrist exit
-        val idxBaseRadial = Offset(
-            indexMcp.x + radialSide.x * (wIndex * 1.12f),
-            indexMcp.y + radialSide.y * (wIndex * 1.12f)
+        // 2. Shaded 3D Metacarpal Palm Facets
+        val palmTris = listOf(
+            Triple(0, 1, 2),
+            Triple(0, 2, 5),
+            Triple(0, 5, 9),
+            Triple(0, 9, 13),
+            Triple(0, 13, 17)
         )
-        contour.add(idxBaseRadial)
 
-        val thumbCmc = pt(1)
-        val thumbMcp = pt(2)
-        val thumbIp = pt(3)
-        val thumbTip = pt(4)
+        val palmCenter = lerp(wrist, middleMcp, 0.52f)
+        val palmBrush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.24f),
+                rimTint.copy(alpha = 0.14f),
+                Color(0xFF0A192F).copy(alpha = 0.28f)
+            ),
+            center = palmCenter,
+            radius = palmSpan * 1.15f
+        )
 
-        // Smooth curved saddle between index base and thumb IP joint
-        val saddleMid = lerp(idxBaseRadial, lerp(thumbMcp, thumbIp, 0.45f), 0.52f)
-        contour.add(saddleMid)
-
-        val tn1 = outNormal(thumbMcp, thumbIp)
-        val tn2 = outNormal(thumbIp, thumbTip)
-        val tAxis = Offset(thumbTip.x - thumbIp.x, thumbTip.y - thumbIp.y)
-        val tLen = hypot(tAxis.x, tAxis.y).coerceAtLeast(1f)
-        val tTipDir = Offset(tAxis.x / tLen, tAxis.y / tLen)
-
-        // Inner thumb edge up to rounded thumb tip
-        contour.add(Offset(thumbIp.x + tn1.x * wThumb * 0.88f, thumbIp.y + tn1.y * wThumb * 0.88f))
-        contour.add(Offset(thumbTip.x + tn2.x * wThumb * 0.72f + tTipDir.x * wThumb * 0.35f,
-                           thumbTip.y + tn2.y * wThumb * 0.72f + tTipDir.y * wThumb * 0.35f))
-        contour.add(Offset(thumbTip.x + tTipDir.x * wThumb * 0.72f,
-                           thumbTip.y + tTipDir.y * wThumb * 0.72f))
-        contour.add(Offset(thumbTip.x - tn2.x * wThumb * 0.72f + tTipDir.x * wThumb * 0.35f,
-                           thumbTip.y - tn2.y * wThumb * 0.72f + tTipDir.y * wThumb * 0.35f))
-
-        // Outer thumb edge & thenar eminence down to radial wrist
-        contour.add(Offset(thumbIp.x - tn1.x * wThumb * 0.95f, thumbIp.y - tn1.y * wThumb * 0.95f))
-        contour.add(Offset(thumbMcp.x - tn1.x * wThumb * 1.05f, thumbMcp.y - tn1.y * wThumb * 1.05f))
-        contour.add(Offset(thumbCmc.x + radialSide.x * palmSpan * 0.22f, thumbCmc.y + radialSide.y * palmSpan * 0.22f))
-        contour.add(Offset(wrist.x + radialSide.x * palmSpan * 0.36f, wrist.y + radialSide.y * palmSpan * 0.36f))
-        contour.add(Offset(wrist.x + radialSide.x * palmSpan * 0.34f + downArm.x * palmSpan * 0.55f,
-                           wrist.y + radialSide.y * palmSpan * 0.34f + downArm.y * palmSpan * 0.55f))
-
-        // Build smooth Catmull-Rom / quadratic spline through contour points
-        val smoothPath = Path()
-        if (contour.size >= 3) {
-            smoothPath.moveTo(contour[0].x, contour[0].y)
-            for (i in 0 until contour.size - 1) {
-                val p0 = contour[i]
-                val p1 = contour[i + 1]
-                val mid = lerp(p0, p1, 0.5f)
-                smoothPath.quadraticBezierTo(p0.x, p0.y, mid.x, mid.y)
+        palmTris.forEach { (i1, i2, i3) ->
+            val p1 = pt(i1); val p2 = pt(i2); val p3 = pt(i3)
+            val triPath = Path().apply {
+                moveTo(p1.x, p1.y); lineTo(p2.x, p2.y); lineTo(p3.x, p3.y); close()
             }
-            val last = contour.last()
-            smoothPath.lineTo(last.x, last.y)
+            drawPath(path = triPath, brush = palmBrush)
+            drawPath(
+                path = triPath,
+                color = rimTint.copy(alpha = 0.18f),
+                style = Stroke(width = 1.dp.toPx(), join = StrokeJoin.Round)
+            )
         }
 
-        val topY = contour.minOfOrNull { it.y } ?: 0f
-        val bottomY = contour.maxOfOrNull { it.y } ?: size.height
-        val fadeSpan = (bottomY - topY).coerceAtLeast(100f)
-
-        val glowBrush = Brush.verticalGradient(
-            0.0f to Color.White.copy(alpha = 0.28f),
-            0.78f to Color.White.copy(alpha = 0.20f),
-            1.0f to Color.Transparent,
-            startY = topY,
-            endY = topY + fadeSpan
+        // 3. Build 3D Phalanx Bones & Sort Back-to-Front by Z-Depth
+        val fingerSpecs = listOf(
+            Pair(listOf(1, 2, 3, 4), listOf(0.18f, 0.15f, 0.13f, 0.11f)),
+            Pair(listOf(5, 6, 7, 8), listOf(0.13f, 0.115f, 0.10f, 0.088f)),
+            Pair(listOf(9, 10, 11, 12), listOf(0.135f, 0.12f, 0.105f, 0.092f)),
+            Pair(listOf(13, 14, 15, 16), listOf(0.128f, 0.112f, 0.098f, 0.085f)),
+            Pair(listOf(17, 18, 19, 20), listOf(0.115f, 0.10f, 0.088f, 0.075f))
         )
 
-                val lineBrush = Brush.verticalGradient(
-            0.0f to Color.White.copy(alpha = 0.96f),
-            0.78f to Color.White.copy(alpha = 0.85f),
-            1.0f to Color.Transparent,
-            startY = topY,
-            endY = topY + fadeSpan
-        )
-
-        drawPath(
-            path = smoothPath,
-            brush = glowBrush,
-            style = Stroke(
-                width = 8.dp.toPx(),
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
-        )
-        
-            // Inner side going down
-            contour.add(Offset(dip.x - n2.x * halfW * 0.88f, dip.y - n2.y * halfW * 0.88f))
-            contour.add(Offset(pip.x - n1.x * halfW * 0.96f, pip.y - n1.y * halfW * 0.96f))
+        val bones = mutableListOf<BoneSegment3D>()
+        fingerSpecs.forEach { (indices, ratios) ->
+            for (i in 0 until indices.lastIndex) {
+                val idxA = indices[i]
+                val idxB = indices[i + 1]
+                val avgZ = (zAt(idxA) + zAt(idxB)) * 0.5f
+                bones.add(
+                    BoneSegment3D(
+                        a = pt(idxA),
+                        b = pt(idxB),
+                        zDepth = avgZ,
+                        radiusA = palmSpan * ratios[i],
+                        radiusB = palmSpan * ratios[i + 1]
+                    )
+                )
+            }
         }
 
-        fun addWebbing(mcpA: Int, pipA: Int, mcpB: Int, pipB: Int) {
-            val webA = lerp(pt(mcpA), pt(pipA), 0.26f)
-            val webB = lerp(pt(mcpB), pt(pipB), 0.26f)
-            contour.add(lerp(webA, webB, 0.5f))
+        bones.sortByDescending { it.zDepth }
+
+        // 4. Render Each Phalanx as a Lit 3D Cylinder + Joint Sphere
+        bones.forEach { bone ->
+            val dx = bone.b.x - bone.a.x
+            val dy = bone.b.y - bone.a.y
+            val len = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
+            val nx = -dy / len
+            val ny = dx / len
+
+            val avgR = (bone.radiusA + bone.radiusB) * 0.5f
+            val depthBoost = (-bone.zDepth * 4f).coerceIn(-0.08f, 0.14f)
+
+            val capsulePath = Path().apply {
+                moveTo(bone.a.x + nx * bone.radiusA, bone.a.y + ny * bone.radiusA)
+                lineTo(bone.b.x + nx * bone.radiusB, bone.b.y + ny * bone.radiusB)
+                lineTo(bone.b.x - nx * bone.radiusB, bone.b.y - ny * bone.radiusB)
+                lineTo(bone.a.x - nx * bone.radiusA, bone.a.y - ny * bone.radiusA)
+                close()
+            }
+
+            val cylinderBrush = Brush.linearGradient(
+                0.0f to Color.White.copy(alpha = (0.58f + depthBoost).coerceIn(0.2f, 0.85f)),
+                0.35f to rimTint.copy(alpha = (0.26f + depthBoost).coerceIn(0.15f, 0.5f)),
+                0.78f to Color(0xFF0D1B2A).copy(alpha = 0.42f),
+                1.0f to rimTint.copy(alpha = 0.48f),
+                start = Offset(bone.a.x + nx * avgR, bone.a.y + ny * avgR),
+                end = Offset(bone.a.x - nx * avgR, bone.a.y - ny * avgR)
+            )
+
+            drawLine(
+                color = Color.Black.copy(alpha = 0.28f),
+                start = Offset(bone.a.x + 2.dp.toPx(), bone.a.y + 3.dp.toPx()),
+                end = Offset(bone.b.x + 2.dp.toPx(), bone.b.y + 3.dp.toPx()),
+                strokeWidth = avgR * 2.05f,
+                cap = StrokeCap.Round
+            )
+
+            drawPath(path = capsulePath, brush = cylinderBrush)
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.White.copy(alpha = 0.45f), rimTint.copy(alpha = 0.18f)),
+                    center = Offset(bone.b.x + nx * bone.radiusB * 0.3f, bone.b.y + ny * bone.radiusB * 0.3f),
+                    radius = bone.radiusB * 1.1f
+                ),
+                radius = bone.radiusB,
+                center = bone.b
+            )
+
+            drawLine(
+                color = Color.White.copy(alpha = (0.72f + depthBoost).coerceIn(0.35f, 0.95f)),
+                start = Offset(bone.a.x + nx * bone.radiusA, bone.a.y + ny * bone.radiusA),
+                end = Offset(bone.b.x + nx * bone.radiusB, bone.b.y + ny * bone.radiusB),
+                strokeWidth = 1.5.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = rimTint.copy(alpha = 0.55f),
+                start = Offset(bone.a.x - nx * bone.radiusA, bone.a.y - ny * bone.radiusA),
+                end = Offset(bone.b.x - nx * bone.radiusB, bone.b.y - ny * bone.radiusB),
+                strokeWidth = 1.2.dp.toPx(),
+                cap = StrokeCap.Round
+            )
         }
-        drawPath(
-            path = smoothPath,
-            brush = glowBrush,
-            style = Stroke(
-                width = 8.dp.toPx(),
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
-        )
 
-                // Crisp continuous white silhouette outline
-        drawPath(
-            path = smoothPath,
-            brush = lineBrush,
-            style = Stroke(
-                width = 2.4.dp.toPx(),
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
-        )
-
-        // Subtle index base knuckle indicator (Landmark 5) for bevel alignment
+        // 5. Glowing 3D Knuckle Target Node (Landmark 5)
         val knuckle = pt(5)
         drawCircle(
-            color = Color(0xFFFFEE00).copy(alpha = 0.32f),
-            radius = 16.dp.toPx(),
+            brush = Brush.radialGradient(
+                colors = listOf(Color(0xFFFFEE00).copy(alpha = 0.65f), Color.Transparent),
+                center = knuckle,
+                radius = 20.dp.toPx()
+            ),
+            radius = 20.dp.toPx(),
             center = knuckle
         )
         drawCircle(
             color = Color(0xFFFFEE00),
-            radius = 5.dp.toPx(),
+            radius = 5.5.dp.toPx(),
             center = knuckle
         )
     }
 }
-
 
 @Composable
 fun GripMetricGauge(
