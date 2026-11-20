@@ -799,10 +799,10 @@ fun HandSkeletonOverlay(
 
         fun pt(index: Int): Offset = Offset(landmarks[index].x * w, landmarks[index].y * h)
 
-        fun offsetPerp(
-            base: SmoothedPoint,
-            refA: SmoothedPoint,
-            refB: SmoothedPoint,
+        fun offsetPerpPx(
+            base: Offset,
+            refA: Offset,
+            refB: Offset,
             amountPx: Float
         ): Offset {
             val vx = refB.x - refA.x
@@ -810,58 +810,58 @@ fun HandSkeletonOverlay(
             val len = hypot(vx.toDouble(), vy.toDouble()).toFloat().coerceAtLeast(0.0001f)
             val nx = -vy / len
             val ny = vx / len
-            return Offset(base.x * w + nx * amountPx, base.y * h + ny * amountPx)
+            return Offset(base.x + nx * amountPx, base.y + ny * amountPx)
         }
 
         val fingerHalfWidth = 3.5.dp.toPx()
         val thumbHalfWidth = 4.5.dp.toPx()
 
         val wrist = pt(0)
-        val thumbCmc = landmarks[1]
-        val thumbMcp = landmarks[2]
-        val thumbIp = landmarks[3]
-        val thumbTip = landmarks[4]
+        val thumbCmc = pt(1)
+        val thumbMcp = pt(2)
+        val thumbIp = pt(3)
+        val thumbTip = pt(4)
 
-        val indexMcp = landmarks[5]
-        val indexPip = landmarks[6]
-        val indexTip = landmarks[8]
+        val indexMcp = pt(5)
+        val indexPip = pt(6)
+        val indexTip = pt(8)
 
-        val middleMcp = landmarks[9]
-        val middlePip = landmarks[10]
-        val middleTip = landmarks[12]
+        val middleMcp = pt(9)
+        val middlePip = pt(10)
+        val middleTip = pt(12)
 
-        val ringMcp = landmarks[13]
-        val ringPip = landmarks[14]
-        val ringTip = landmarks[16]
+        val ringMcp = pt(13)
+        val ringPip = pt(14)
+        val ringTip = pt(16)
 
-        val pinkyMcp = landmarks[17]
-        val pinkyPip = landmarks[18]
-        val pinkyTip = landmarks[20]
+        val pinkyMcp = pt(17)
+        val pinkyPip = pt(18)
+        val pinkyTip = pt(20)
 
         val contourPoints: List<Offset> = listOf(
             wrist,
-            offsetPerp(thumbCmc, wrist, thumbMcp, -thumbHalfWidth),
-            offsetPerp(thumbMcp, thumbCmc, thumbIp, -thumbHalfWidth),
-            offsetPerp(thumbIp, thumbMcp, thumbTip, -thumbHalfWidth),
-            Offset(thumbTip.x * w, thumbTip.y * h),
-            offsetPerp(thumbIp, thumbMcp, thumbTip, thumbHalfWidth),
-            offsetPerp(indexMcp, wrist, indexTip, -fingerHalfWidth),
-            offsetPerp(indexPip, indexMcp, indexTip, -fingerHalfWidth),
-            Offset(indexTip.x * w, indexTip.y * h),
-            offsetPerp(indexPip, indexMcp, indexTip, fingerHalfWidth),
-            offsetPerp(middleMcp, wrist, middleTip, -fingerHalfWidth),
-            offsetPerp(middlePip, middleMcp, middleTip, -fingerHalfWidth),
-            Offset(middleTip.x * w, middleTip.y * h),
-            offsetPerp(middlePip, middleMcp, middleTip, fingerHalfWidth),
-            offsetPerp(ringMcp, wrist, ringTip, -fingerHalfWidth),
-            offsetPerp(ringPip, ringMcp, ringTip, -fingerHalfWidth),
-            Offset(ringTip.x * w, ringTip.y * h),
-            offsetPerp(ringPip, ringMcp, ringTip, fingerHalfWidth),
-            offsetPerp(pinkyMcp, wrist, pinkyTip, -fingerHalfWidth),
-            offsetPerp(pinkyPip, pinkyMcp, pinkyTip, -fingerHalfWidth),
-            Offset(pinkyTip.x * w, pinkyTip.y * h),
-            offsetPerp(pinkyPip, pinkyMcp, pinkyTip, fingerHalfWidth),
-            offsetPerp(pinkyMcp, wrist, pinkyTip, fingerHalfWidth),
+            offsetPerpPx(thumbCmc, wrist, thumbMcp, -thumbHalfWidth),
+            offsetPerpPx(thumbMcp, thumbCmc, thumbIp, -thumbHalfWidth),
+            offsetPerpPx(thumbIp, thumbMcp, thumbTip, -thumbHalfWidth),
+            thumbTip,
+            offsetPerpPx(thumbIp, thumbMcp, thumbTip, thumbHalfWidth),
+            offsetPerpPx(indexMcp, wrist, indexTip, -fingerHalfWidth),
+            offsetPerpPx(indexPip, indexMcp, indexTip, -fingerHalfWidth),
+            indexTip,
+            offsetPerpPx(indexPip, indexMcp, indexTip, fingerHalfWidth),
+            offsetPerpPx(middleMcp, wrist, middleTip, -fingerHalfWidth),
+            offsetPerpPx(middlePip, middleMcp, middleTip, -fingerHalfWidth),
+            middleTip,
+            offsetPerpPx(middlePip, middleMcp, middleTip, fingerHalfWidth),
+            offsetPerpPx(ringMcp, wrist, ringTip, -fingerHalfWidth),
+            offsetPerpPx(ringPip, ringMcp, ringTip, -fingerHalfWidth),
+            ringTip,
+            offsetPerpPx(ringPip, ringMcp, ringTip, fingerHalfWidth),
+            offsetPerpPx(pinkyMcp, wrist, pinkyTip, -fingerHalfWidth),
+            offsetPerpPx(pinkyPip, pinkyMcp, pinkyTip, -fingerHalfWidth),
+            pinkyTip,
+            offsetPerpPx(pinkyPip, pinkyMcp, pinkyTip, fingerHalfWidth),
+            offsetPerpPx(pinkyMcp, wrist, pinkyTip, fingerHalfWidth),
             wrist
         )
 
@@ -879,7 +879,6 @@ fun HandSkeletonOverlay(
             }
         }
 
-        val middleTop = Offset(middleTip.x * w, middleTip.y * h)
         val primaryColor = when {
             metrics.habitAlert != null -> Color(0xFFFF3B30)
             metrics.lockScore >= 80 -> Color(0xFF00FF88)
@@ -893,7 +892,7 @@ fun HandSkeletonOverlay(
                 primaryColor
             ),
             start = wrist,
-            end = middleTop
+            end = middleTip
         )
 
         val glowBrush = Brush.linearGradient(
@@ -903,7 +902,7 @@ fun HandSkeletonOverlay(
                 primaryColor.copy(alpha = 0.28f)
             ),
             start = wrist,
-            end = middleTop
+            end = middleTopOrFallback(middleTip)
         )
 
         drawPath(
@@ -928,7 +927,7 @@ fun HandSkeletonOverlay(
             drawCircle(
                 color = Color(0xFFFFEE00),
                 radius = 7.dp.toPx(),
-                center = pt(5)
+                center = indexMcp
             )
             landmarks.forEachIndexed { idx, lm ->
                 if (idx != 5) {
@@ -942,6 +941,8 @@ fun HandSkeletonOverlay(
         }
     }
 }
+
+private fun middleTopOrFallback(middleTip: Offset): Offset = middleTip
 
 @Composable
 fun GripMetricGauge(
