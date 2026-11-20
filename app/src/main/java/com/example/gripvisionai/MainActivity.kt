@@ -819,7 +819,6 @@ fun HandSkeletonOverlay(
 
         fun pt(index: Int): Offset = Offset(landmarks[index].x * w, landmarks[index].y * h)
 
-        // Offset perpendicular to a segment so each finger edge stays on one side without zig-zagging
         fun sideOffset(point: Offset, dirFrom: Offset, dirTo: Offset, widthPx: Float): Offset {
             val vx = dirTo.x - dirFrom.x
             val vy = dirTo.y - dirFrom.y
@@ -829,72 +828,81 @@ fun HandSkeletonOverlay(
             return Offset(point.x + nx * widthPx, point.y + ny * widthPx)
         }
 
+        // Builds a smooth up-tip-down contour for a single finger/thumb chain
+        fun appendFingerContour(
+            path: Path,
+            joints: List<Offset>,
+            halfWidthPx: Float,
+            startWithMoveTo: Boolean
+        ) {
+            if (joints.size < 2) return
+            val leftSide = mutableListOf<Offset>()
+            val rightSide = mutableListOf<Offset>()
+
+            for (i in joints.indices) {
+                val curr = joints[i]
+                val prev = joints.getOrElse(i - 1) { curr }
+                val next = joints.getOrElse(i + 1) { curr }
+
+                // Taper slightly near the tip for a more natural finger shape
+                val tipTaper = if (i == joints.lastIndex) {
+                    0.35f
+                } else if (i == joints.lastIndex - 1) {
+                    0.8f
+                } else {
+                    1f
+                }
+                val hw = halfWidthPx * tipTaper
+
+                if (i == joints.lastIndex) {
+                    leftSide.add(sideOffset(curr, prev, curr, -hw))
+                    leftSide.add(curr)
+                    rightSide.add(sideOffset(curr, prev, curr, hw))
+                } else {
+                    leftSide.add(sideOffset(curr, prev, next, -hw))
+                    rightSide.add(sideOffset(curr, prev, next, hw))
+                }
+            }
+
+            val fingerLoop = leftSide + rightSide.asReversed()
+            if (fingerLoop.isEmpty()) return
+
+            if (startWithMoveTo) {
+                path.moveTo(fingerLoop.first().x, fingerLoop.first().y)
+            } else {
+                path.lineTo(fingerLoop.first().x, fingerLoop.first().y)
+            }
+
+            for (i in 1 until fingerLoop.lastIndex) {
+                val p1 = fingerLoop[i]
+                val p2 = fingerLoop[i + 1]
+                path.quadraticBezierTo(p1.x, p1.y, (p1.x + p2.x) * 0.5f, (p1.y + p2.y) * 0.5f)
+            }
+            path.lineTo(fingerLoop.last().x, fingerLoop.last().y)
+        }
+
         val wrist = pt(0)
-        val thumbCmc = pt(1)
-        val thumbMcp = pt(2)
-        val thumbIp = pt(3)
-        val thumbTip = pt(4)
+        val thumbChain = listOf(pt(1), pt(2), pt(3), pt(4))
+        val indexChain = listOf(pt(5), pt(6), pt(7), pt(8))
+        val middleChain = listOf(pt(9), pt(10), pt(11), pt(12))
+        val ringChain = listOf(pt(13), pt(14), pt(15), pt(16))
+        val pinkyChain = listOf(pt(17), pt(18), pt(19), pt(20))
 
-        val indexMcp = pt(5)
-        val indexPip = pt(6)
-        val indexDip = pt(7)
-        val indexTip = pt(8)
-
-        val middleMcp = pt(9)
-        val middlePip = pt(10)
-        val middleDip = pt(11)
-        val middleTip = pt(12)
-
-        val ringMcp = pt(13)
-        val ringPip = pt(14)
-        val ringDip = pt(15)
-        val ringTip = pt(16)
-
-        val pinkyMcp = pt(17)
-        val pinkyPip = pt(18)
-        val pinkyDip = pt(19)
-        val pinkyTip = pt(20)
-
-        val halfFinger = 4.dp.toPx()
-        val halfThumb = 5.dp.toPx()
-
-        // Outer-only perimeter path:
-        // Wrist -> Thumb outer edge -> Thumb tip -> Index outer edge -> Index tip ->
-        // Middle tip -> Ring tip -> Pinky outer edge -> Pinky tip -> Pinky inner/palm -> Wrist
-        val outerPoints: List<Offset> = listOf(
-            wrist,
-            sideOffset(thumbCmc, wrist, thumbIp, -halfThumb),
-            sideOffset(thumbMcp, thumbCmc, thumbTip, -halfThumb),
-            sideOffset(thumbIp, thumbMcp, thumbTip, -halfThumb),
-            thumbTip,
-            sideOffset(thumbIp, thumbTip, thumbMcp, -halfThumb * 0.65f),
-            sideOffset(indexMcp, wrist, indexTip, -halfFinger),
-            sideOffset(indexPip, indexMcp, indexTip, -halfFinger),
-            sideOffset(indexDip, indexPip, indexTip, -halfFinger * 0.85f),
-            indexTip,
-            sideOffset(middleTip, middleDip, middleTip, -halfFinger * 0.75f),
-            middleTip,
-            sideOffset(ringTip, ringDip, ringTip, -halfFinger * 0.75f),
-            ringTip,
-            sideOffset(pinkyDip, pinkyPip, pinkyTip, halfFinger * 0.85f),
-            pinkyTip,
-            sideOffset(pinkyPip, pinkyMcp, pinkyTip, halfFinger),
-            sideOffset(pinkyMcp, wrist, pinkyTip, halfFinger),
-            wrist
-        )
+        val fingerHalfWidth = 5.dp.toPx()
+        val thumbHalfWidth = 6.dp.toPx()
 
         val outlinePath = Path().apply {
-            if (outerPoints.size >= 3) {
-                moveTo(outerPoints.first().x, outerPoints.first().y)
-                for (i in 1 until outerPoints.lastIndex) {
-                    val curr = outerPoints[i]
-                    val next = outerPoints[i + 1]
-                    val midX = (curr.x + next.x) * 0.5f
-                    val midY = (curr.y + next.y) * 0.5f
-                    quadraticBezierTo(curr.x, curr.y, midX, midY)
-                }
-                lineTo(outerPoints.last().x, outerPoints.last().y)
-            }
+            moveTo(wrist.x, wrist.y)
+            appendFingerContour(this, thumbChain, thumbHalfWidth, startWithMoveTo = false)
+            lineTo(indexChain.first().x, indexChain.first().y)
+            appendFingerContour(this, indexChain, fingerHalfWidth, startWithMoveTo = false)
+            lineTo(middleChain.first().x, middleChain.first().y)
+            appendFingerContour(this, middleChain, fingerHalfWidth, startWithMoveTo = false)
+            lineTo(ringChain.first().x, ringChain.first().y)
+            appendFingerContour(this, ringChain, fingerHalfWidth, startWithMoveTo = false)
+            lineTo(pinkyChain.first().x, pinkyChain.first().y)
+            appendFingerContour(this, pinkyChain, fingerHalfWidth * 0.9f, startWithMoveTo = false)
+            lineTo(wrist.x, wrist.y)
         }
 
         val primaryColor = when {
@@ -906,11 +914,11 @@ fun HandSkeletonOverlay(
         val strokeBrush = Brush.linearGradient(
             colors = listOf(
                 primaryColor.copy(alpha = 0.05f),
-                primaryColor.copy(alpha = 0.58f),
-                primaryColor.copy(alpha = 0.85f)
+                primaryColor.copy(alpha = 0.62f),
+                primaryColor.copy(alpha = 0.9f)
             ),
             start = wrist,
-            end = middleTip
+            end = pt(12)
         )
 
         drawPath(
@@ -926,7 +934,7 @@ fun HandSkeletonOverlay(
             drawCircle(
                 color = Color(0xFFFFEE00),
                 radius = 5.dp.toPx(),
-                center = indexMcp
+                center = pt(5)
             )
             landmarks.forEachIndexed { idx, lm ->
                 if (idx != 5) {
