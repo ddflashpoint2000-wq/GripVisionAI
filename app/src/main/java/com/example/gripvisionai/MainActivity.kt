@@ -205,15 +205,21 @@ class GripAnalyzer(
                     postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
                 }
                 val rotatedBitmap = Bitmap.createBitmap(
-                    bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+                    bitmap,
+                    0,
+                    0,
+                    bitmap.width,
+                    bitmap.height,
+                    matrix,
+                    true
                 )
                 val mpImage = BitmapImageBuilder(rotatedBitmap).build()
 
                 val result = handLandmarker?.detect(mpImage)
                 if (result != null && result.landmarks().isNotEmpty()) {
                     val landmarks = result.landmarks()[0]
-                    val metrics = computeMetrics(landmarks, sport, shot)
-                    onMetricsUpdated(metrics)
+                    val computed = computeMetrics(landmarks, sport, shot)
+                    onMetricsUpdated(computed)
                 } else {
                     onMetricsUpdated(
                         GripMetrics(coachingTip = "No hand detected. Center your grip inside the guide.")
@@ -323,48 +329,60 @@ fun GripCameraScreen() {
         onDispose { cameraExecutor.shutdown() }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
         if (hasCameraPermission) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     val previewView = PreviewView(ctx)
                     val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .build()
-                            .also {
-                                it.setAnalyzer(cameraExecutor) { proxy ->
-                                    analyzer.analyzeFrame(proxy)
-                                }
+                    cameraProviderFuture.addListener(
+                        {
+                            val cameraProvider = cameraProviderFuture.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
                             }
 
-                        cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            CameraSelector.DEFAULT_BACK_CAMERA,
-                            preview,
-                            imageAnalysis
-                        )
-                    }, ContextCompat.getMainExecutor(ctx))
+                            val imageAnalysis = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .build()
+                                .also {
+                                    it.setAnalyzer(cameraExecutor) { proxy ->
+                                        analyzer.analyzeFrame(proxy)
+                                    }
+                                }
+
+                            cameraProvider.unbindAll()
+                            cameraProvider.bindToLifecycle(
+                                lifecycleOwner,
+                                CameraSelector.DEFAULT_BACK_CAMERA,
+                                preview,
+                                imageAnalysis
+                            )
+                        },
+                        ContextCompat.getMainExecutor(ctx)
+                    )
                     previewView
                 }
             )
         } else {
             Column(
-                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("Camera permission is required to scan grips.", color = Color.White)
+                Text(
+                    text = "Camera permission is required to scan grips.",
+                    color = Color.White
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                    Text("Grant Camera Permission")
+                    Text(text = "Grant Camera Permission")
                 }
             }
         }
@@ -376,7 +394,7 @@ fun GripCameraScreen() {
             isLeftHanded = isLeftHanded
         )
 
-        HandSkeletonOverlay(metrics)
+        HandSkeletonOverlay(metrics = metrics)
 
         Column(
             modifier = Modifier
@@ -401,7 +419,7 @@ fun GripCameraScreen() {
                     onClick = { isLeftHanded = !isLeftHanded },
                     label = {
                         Text(
-                            if (isLeftHanded) "Lefty" else "Righty",
+                            text = if (isLeftHanded) "Lefty" else "Righty",
                             fontSize = 12.sp,
                             maxLines = 1
                         )
@@ -416,7 +434,9 @@ fun GripCameraScreen() {
             }
 
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 GripSport.entries.forEach { sport ->
@@ -425,7 +445,7 @@ fun GripCameraScreen() {
                         onClick = { selectedSport = sport },
                         label = {
                             Text(
-                                sport.label,
+                                text = sport.label,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1
@@ -442,14 +462,22 @@ fun GripCameraScreen() {
             }
 
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 ShotPreset.entries.forEach { shot ->
                     FilterChip(
                         selected = selectedShot == shot,
                         onClick = { selectedShot = shot },
-                        label = { Text(shot.label, fontSize = 11.sp, maxLines = 1) },
+                        label = {
+                            Text(
+                                text = shot.label,
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        },
                         colors = FilterChipDefaults.filterChipColors(
                             containerColor = Color(0xAA121A1E),
                             labelColor = Color.LightGray,
@@ -511,25 +539,175 @@ fun GripCameraScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         GripMetricGauge(
-                            "Grip Lock",
-                            "${metrics.lockScore}%",
-                            Color(0xFF00FF88),
-                            Modifier.weight(1f)
+                            label = "Grip Lock",
+                            value = "${metrics.lockScore}%",
+                            ringColor = Color(0xFF00FF88),
+                            modifier = Modifier.weight(1f)
                         )
                         GripMetricGauge(
-                            "Detected",
-                            metrics.detectedBevel,
-                            Color(0xFF00E5FF),
-                            Modifier.weight(1f)
+                            label = "Detected",
+                            value = metrics.detectedBevel,
+                            ringColor = Color(0xFF00E5FF),
+                            modifier = Modifier.weight(1f)
                         )
                         GripMetricGauge(
-                            "Fingers",
-                            metrics.fingerSpreadStatus,
-                            Color(0xFF00E5FF),
-                            Modifier.weight(1f)
+                            label = "Fingers",
+                            value = metrics.fingerSpreadStatus,
+                            ringColor = Color(0xFF00E5FF),
+                            modifier = Modifier.weight(1f)
                         )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-    
+                    Text(
+                        text = metrics.coachingTip,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 4. 8-BEVEL OCTAGON & 21-POINT HAND UI
+// ==========================================
+
+@Composable
+fun BevelOctagonOverlay(
+    targetBevel: Int,
+    gripName: String,
+    isLocked: Boolean,
+    isLeftHanded: Boolean
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val cx = size.width * 0.5f
+            val cy = size.height * 0.48f
+            val radius = size.width * 0.24f
+            val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f), 0f)
+
+            val path = Path()
+            for (i in 0 until 8) {
+                val angle = (i * 45.0 - 112.5) * PI / 180.0
+                val x = cx + (radius * cos(angle)).toFloat()
+                val y = cy + (radius * sin(angle)).toFloat()
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            path.close()
+
+            drawPath(
+                path = path,
+                color = if (isLocked) Color(0xAA00FF88) else Color(0x8800E5FF),
+                style = Stroke(width = 8f, pathEffect = if (isLocked) null else dash)
+            )
+
+            val mappedBevel = if (isLeftHanded && targetBevel in 2..4) (10 - targetBevel) else targetBevel
+            val targetAngle = ((mappedBevel - 1) * 45.0 - 90.0) * PI / 180.0
+            val tx = cx + (radius * cos(targetAngle)).toFloat()
+            val ty = cy + (radius * sin(targetAngle)).toFloat()
+
+            drawCircle(
+                color = Color(0xFF00FF88),
+                radius = 18f,
+                center = Offset(tx, ty)
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = (-135).dp)
+                .background(Color(0xBB10181C), RoundedCornerShape(20.dp))
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = "Target: $gripName (Bevel $targetBevel)",
+                color = Color(0xFF00FF88),
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun HandSkeletonOverlay(metrics: GripMetrics) {
+    val landmarks = metrics.landmarks
+    if (landmarks.isEmpty()) return
+
+    val connections = listOf(
+        0 to 1, 1 to 2, 2 to 3, 3 to 4,
+        0 to 5, 5 to 6, 6 to 7, 7 to 8,
+        5 to 9, 9 to 10, 10 to 11, 11 to 12,
+        9 to 13, 13 to 14, 14 to 15, 15 to 16,
+        13 to 17, 17 to 18, 18 to 19, 19 to 20,
+        0 to 17
+    )
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val lineColor = if (metrics.habitAlert == null) Color(0xFF00FF88) else Color(0xFFFF3B30)
+
+        connections.forEach { (a, b) ->
+            if (a < landmarks.size && b < landmarks.size) {
+                val start = Offset(landmarks[a].x() * size.width, landmarks[a].y() * size.height)
+                val end = Offset(landmarks[b].x() * size.width, landmarks[b].y() * size.height)
+                drawLine(color = lineColor, start = start, end = end, strokeWidth = 8f, cap = StrokeCap.Round)
+            }
+        }
+
+        landmarks.forEachIndexed { idx, pt ->
+            val isIndexKnuckle = idx == 5
+            drawCircle(
+                color = if (isIndexKnuckle) Color(0xFFFFEE00) else Color.White,
+                radius = if (isIndexKnuckle) 16f else 9f,
+                center = Offset(pt.x() * size.width, pt.y() * size.height)
+            )
+        }
+    }
+}
+
+@Composable
+fun GripMetricGauge(
+    label: String,
+    value: String,
+    ringColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawArc(
+                    color = ringColor.copy(alpha = 0.25f),
+                    startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                    style = Stroke(width = 7.dp.toPx())
+                )
+                drawArc(
+                    color = ringColor,
+                    startAngle = -90f, sweepAngle = 285f, useCenter = false,
+                    style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
+                )
+            }
+            Text(
+                text = value,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                maxLines = 1
+            )
+        }
+        Spacer(modifier = Modifier.height(5.dp))
+        Text(
+            text = label,
+            color = Color.LightGray,
+            fontSize = 11.sp,
+            maxLines = 1
+        )
+    }
+}
