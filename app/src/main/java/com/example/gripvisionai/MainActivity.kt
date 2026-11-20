@@ -78,7 +78,6 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -536,7 +535,6 @@ fun GripCameraScreen() {
             showLandmarkPoints = showJoints
         )
 
-        // Top HUD: Title, Target Pill, Sport/Shot Chips, and Non-Overlapping Alert Banner
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -678,7 +676,6 @@ fun GripCameraScreen() {
             }
         }
 
-        // Bottom Controls & Metric Gauges
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -802,8 +799,12 @@ fun HandSkeletonOverlay(
 
         fun pt(index: Int): Offset = Offset(landmarks[index].x * w, landmarks[index].y * h)
 
-        // Helper to offset a point perpendicular to a segment for natural finger thickness
-        fun offsetPerp(base: SmoothedPoint, refA: SmoothedPoint, refB: SmoothedPoint, amountPx: Float): Offset {
+        fun offsetPerp(
+            base: SmoothedPoint,
+            refA: SmoothedPoint,
+            refB: SmoothedPoint,
+            amountPx: Float
+        ): Offset {
             val vx = refB.x - refA.x
             val vy = refB.y - refA.y
             val len = hypot(vx.toDouble(), vy.toDouble()).toFloat().coerceAtLeast(0.0001f)
@@ -837,8 +838,7 @@ fun HandSkeletonOverlay(
         val pinkyPip = landmarks[18]
         val pinkyTip = landmarks[20]
 
-        // Trace each digit up and back down so individual fingers read clearly
-        val contourPoints = listOf(
+        val contourPoints: List<Offset> = listOf(
             wrist,
             offsetPerp(thumbCmc, wrist, thumbMcp, -thumbHalfWidth),
             offsetPerp(thumbMcp, thumbCmc, thumbIp, -thumbHalfWidth),
@@ -886,7 +886,6 @@ fun HandSkeletonOverlay(
             else -> Color(0xFFF2F4F7)
         }
 
-        // Fades softly toward the wrist just like the reference contour[span_2](start_span)[span_2](end_span)
         val strokeBrush = Brush.linearGradient(
             colors = listOf(
                 primaryColor.copy(alpha = 0.08f),
