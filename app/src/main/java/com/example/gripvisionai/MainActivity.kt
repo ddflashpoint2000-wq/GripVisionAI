@@ -57,16 +57,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.PathJoin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -784,7 +783,7 @@ fun HandSkeletonOverlay(
                     val next = contourPoints[i + 1]
                     val midX = (curr.x + next.x) * 0.5f
                     val midY = (curr.y + next.y) * 0.5f
-                    quadraticTo(curr.x, curr.y, midX, midY)
+                    quadraticBezierTo(curr.x, curr.y, midX, midY)
                 }
 
                 val last = contourPoints.last()
@@ -825,8 +824,7 @@ fun HandSkeletonOverlay(
             brush = glowBrush,
             style = Stroke(
                 width = 12.dp.toPx(),
-                cap = StrokeCap.Round,
-                join = PathJoin.Round
+                cap = StrokeCap.Round
             )
         )
 
@@ -835,8 +833,7 @@ fun HandSkeletonOverlay(
             brush = strokeBrush,
             style = Stroke(
                 width = 5.dp.toPx(),
-                cap = StrokeCap.Round,
-                join = PathJoin.Round
+                cap = StrokeCap.Round
             )
         )
 
