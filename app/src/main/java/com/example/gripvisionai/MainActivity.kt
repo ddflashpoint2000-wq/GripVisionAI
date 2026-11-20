@@ -5,7 +5,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,11 +22,34 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -35,17 +61,18 @@ import androidx.compose.ui.graphics.PathJoin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.PI
 import kotlin.math.atan2
@@ -204,46 +231,46 @@ class GripAnalyzer(
     }
 
     fun analyzeFrame(imageProxy: ImageProxy) {
-        if (isFrozen) {
-            imageProxy.close()
-            return
-        }
+        try {
+            if (isFrozen) return
 
-        val mediaImage = imageProxy.image
-        if (mediaImage != null && handLandmarker != null) {
-            try {
-                val bitmap = imageProxy.toBitmap()
-                val matrix = Matrix().apply {
-                    postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-                }
-                val rotatedBitmap = Bitmap.createBitmap(
-                    bitmap,
+            val landmarker = handLandmarker ?: return
+            val rawBitmap = imageProxyToBitmap(imageProxy) ?: return
+
+            val rotation = imageProxy.imageInfo.rotationDegrees.toFloat()
+            val rotatedBitmap = if (rotation != 0f) {
+                val matrix = Matrix().apply { postRotate(rotation) }
+                Bitmap.createBitmap(
+                    rawBitmap,
                     0,
                     0,
-                    bitmap.width,
-                    bitmap.height,
+                    rawBitmap.width,
+                    rawBitmap.height,
                     matrix,
                     true
                 )
-                val mpImage = BitmapImageBuilder(rotatedBitmap).build()
-
-                val result = handLandmarker?.detect(mpImage)
-                if (result != null && result.landmarks().isNotEmpty()) {
-                    val rawLandmarks = result.landmarks()[0]
-                    val steadyLandmarks = smoothLandmarks(rawLandmarks)
-                    val computed = computeMetrics(steadyLandmarks, sport, shot)
-                    onMetricsUpdated(computed)
-                } else {
-                    smoothedLandmarks = null
-                    onMetricsUpdated(
-                        GripMetrics(coachingTip = "No hand detected. Center your grip inside the guide.")
-                    )
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } else {
+                rawBitmap
             }
+
+            val mpImage = BitmapImageBuilder(rotatedBitmap).build()
+            val result = landmarker.detect(mpImage)
+
+            if (result.landmarks().isNotEmpty()) {
+                val steadyLandmarks = smoothLandmarks(result.landmarks()[0])
+                val computed = computeMetrics(steadyLandmarks, sport, shot)
+                onMetricsUpdated(computed)
+            } else {
+                smoothedLandmarks = null
+                onMetricsUpdated(
+                    GripMetrics(coachingTip = "No hand detected. Center your grip inside the guide.")
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            imageProxy.close()
         }
-        imageProxy.close()
     }
 
     private fun smoothLandmarks(raw: List<NormalizedLandmark>): List<SmoothedPoint> {
@@ -261,7 +288,6 @@ class GripAnalyzer(
             val dy = lm.y() - p.y
             val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat()
 
-            // Clamp sudden single-frame glitches while allowing intentional fast hand movement
             val clampedTargetX = if (dist > maxStepJump && dist > 0f) {
                 p.x + (dx / dist) * maxStepJump
             } else {
@@ -288,8 +314,11 @@ class GripAnalyzer(
         sport: GripSport,
         shot: ShotPreset
     ): GripMetrics {
-        val target = getGripTarget(sport, shot)
+        if (landmarks.size < 21) {
+            return GripMetrics(coachingTip = "Incomplete hand landmarks.")
+        }
 
+        val target = getGripTarget(sport, shot)
         val wrist = landmarks[0]
         val indexKnuckle = landmarks[5]
 
@@ -308,7 +337,7 @@ class GripAnalyzer(
         } else {
             null
         }
-        val fingerSpreadStatus = if (landmarks.size > 20) "Relaxed" else "Tight"
+        val fingerSpreadStatus = "Relaxed"
 
         return GripMetrics(
             landmarks = landmarks,
@@ -325,12 +354,41 @@ class GripAnalyzer(
         handLandmarker = null
     }
 
-    private fun ImageProxy.toBitmap(): Bitmap {
-        val buffer = planes[0].buffer
-        buffer.rewind()
-        val bytes = ByteArray(buffer.remaining())
-        buffer.get(bytes)
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
+        return when (image.format) {
+            ImageFormat.JPEG -> {
+                val buffer = image.planes[0].buffer
+                buffer.rewind()
+                val bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }
+            ImageFormat.YUV_420_888 -> yuv420ToBitmap(image)
+            else -> null
+        }
+    }
+
+    private fun yuv420ToBitmap(image: ImageProxy): Bitmap? {
+        val width = image.width
+        val height = image.height
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+
+        val ySize = yPlane.buffer.remaining()
+        val uSize = uPlane.buffer.remaining()
+        val vSize = vPlane.buffer.remaining()
+
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        yPlane.buffer.get(nv21, 0, ySize)
+        vPlane.buffer.get(nv21, ySize, vSize)
+        uPlane.buffer.get(nv21, ySize + vSize, uSize)
+
+        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+        val out = ByteArrayOutputStream()
+        yuvImage.compressToJpeg(Rect(0, 0, width, height), 85, out)
+        val jpegBytes = out.toByteArray()
+        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
     }
 }
 
@@ -574,15 +632,11 @@ fun GripCameraScreen() {
         ) {
             Button(
                 onClick = { isFrozen = !isFrozen },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isFrozen) Color(0xFF00E5FF) else Color(0xFF00FF88)
-                ),
                 shape = CircleShape,
                 modifier = Modifier.padding(bottom = 10.dp)
             ) {
                 Text(
                     text = if (isFrozen) "RESUME LIVE SCAN" else "SNAP & CHECK GRIP",
-                    color = Color.Black,
                     fontWeight = FontWeight.Bold
                 )
             }
