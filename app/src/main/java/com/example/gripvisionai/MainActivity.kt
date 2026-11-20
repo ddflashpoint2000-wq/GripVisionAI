@@ -20,6 +20,7 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +31,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -74,9 +74,11 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -103,7 +105,7 @@ enum class GripSport(val label: String) {
 enum class ShotPreset(val label: String) {
     SERVE_VOLLEY("Serve / Volley"),
     FOREHAND("Forehand"),
-    BACKHAND_DINK("Backhand / Dink")
+    BACKHAND_DINK("Backhand")
 }
 
 data class GripTarget(
@@ -257,7 +259,7 @@ class GripAnalyzer(
 
             if (result.landmarks().isNotEmpty()) {
                 val steadyLandmarks = smoothLandmarks(result.landmarks()[0])
-                val computed = computeMetrics(steadyLandmarks, sport, shot)
+                val computed = computeMetrics(steadyLandmarks, sport, shot, isLeftHanded)
                 onMetricsUpdated(computed)
             } else {
                 smoothedLandmarks = null
@@ -311,13 +313,20 @@ class GripAnalyzer(
     private fun computeMetrics(
         landmarks: List<SmoothedPoint>,
         sport: GripSport,
-        shot: ShotPreset
+        shot: ShotPreset,
+        isLeftHanded: Boolean
     ): GripMetrics {
         if (landmarks.size < 21) {
             return GripMetrics(coachingTip = "Incomplete hand landmarks.")
         }
 
         val target = getGripTarget(sport, shot)
+        val effectiveTargetBevel = if (isLeftHanded && target.targetBevel in 2..4) {
+            10 - target.targetBevel
+        } else {
+            target.targetBevel
+        }
+
         val wrist = landmarks[0]
         val indexKnuckle = landmarks[5]
 
@@ -325,18 +334,30 @@ class GripAnalyzer(
         val dy = indexKnuckle.y - wrist.y
         val angleDeg = (atan2(dy.toDouble(), dx.toDouble()) * 180.0 / PI).toFloat()
 
-        val normalizedAngle = (angleDeg + 180f) % 360f
+        val normalizedAngle = ((angleDeg + 90f) % 360f + 360f) % 360f
         val calculatedBevel = ((normalizedAngle / 45f).toInt() % 8) + 1
 
-        val bevelMatch = calculatedBevel == target.targetBevel
-        val lockScore = if (bevelMatch) 92 else 55
+        val bevelDiff = abs(calculatedBevel - effectiveTargetBevel)
+        val circularBevelDiff = minOf(bevelDiff, 8 - bevelDiff)
+        val lockScore = (100 - circularBevelDiff * 24).coerceIn(15, 100)
 
-        val habitAlert = if (!bevelMatch && lockScore < 60) {
-            "Adjust knuckle position closer to Bevel ${target.targetBevel}"
+        val habitAlert = if (lockScore < 65) {
+            "Move knuckle toward Bevel ${target.targetBevel}"
         } else {
             null
         }
-        val fingerSpreadStatus = "Relaxed"
+
+        val indexTip = landmarks[8]
+        val pinkyTip = landmarks[20]
+        val palmWidth = hypot(
+            (landmarks[17].x - landmarks[5].x).toDouble(),
+            (landmarks[17].y - landmarks[5].y).toDouble()
+        ).coerceAtLeast(0.0001)
+        val tipSpan = hypot(
+            (pinkyTip.x - indexTip.x).toDouble(),
+            (pinkyTip.y - indexTip.y).toDouble()
+        ) / palmWidth
+        val fingerSpreadStatus = if (tipSpan > 1.35) "Spread" else "Relaxed"
 
         return GripMetrics(
             landmarks = landmarks,
@@ -422,6 +443,7 @@ fun GripCameraScreen() {
     var selectedShot by remember { mutableStateOf(ShotPreset.SERVE_VOLLEY) }
     var isLeftHanded by remember { mutableStateOf(false) }
     var isFrozen by remember { mutableStateOf(false) }
+    var showJoints by remember { mutableStateOf(false) }
     var metrics by remember { mutableStateOf(GripMetrics()) }
 
     val analyzer = remember {
@@ -505,13 +527,16 @@ fun GripCameraScreen() {
 
         BevelOctagonOverlay(
             targetBevel = currentTarget.targetBevel,
-            gripName = currentTarget.gripName,
             isLocked = metrics.lockScore >= 80,
             isLeftHanded = isLeftHanded
         )
 
-        HandSkeletonOverlay(metrics = metrics)
+        HandSkeletonOverlay(
+            metrics = metrics,
+            showLandmarkPoints = showJoints
+        )
 
+        // Top HUD: Title, Target Pill, Sport/Shot Chips, and Non-Overlapping Alert Banner
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -530,23 +555,36 @@ fun GripCameraScreen() {
                     fontWeight = FontWeight.Bold
                 )
 
-                FilterChip(
-                    selected = isLeftHanded,
-                    onClick = { isLeftHanded = !isLeftHanded },
-                    label = {
-                        Text(
-                            text = if (isLeftHanded) "Lefty" else "Righty",
-                            fontSize = 12.sp,
-                            maxLines = 1
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = showJoints,
+                        onClick = { showJoints = !showJoints },
+                        label = { Text("Joints", fontSize = 11.sp, maxLines = 1) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xAA121A1E),
+                            labelColor = Color.LightGray,
+                            selectedContainerColor = Color(0xFF00E5FF),
+                            selectedLabelColor = Color.Black
                         )
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = Color(0xAA121A1E),
-                        labelColor = Color.White,
-                        selectedContainerColor = Color(0xFF00FF88),
-                        selectedLabelColor = Color.Black
                     )
-                )
+                    FilterChip(
+                        selected = isLeftHanded,
+                        onClick = { isLeftHanded = !isLeftHanded },
+                        label = {
+                            Text(
+                                text = if (isLeftHanded) "Lefty" else "Righty",
+                                fontSize = 12.sp,
+                                maxLines = 1
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = Color(0xAA121A1E),
+                            labelColor = Color.White,
+                            selectedContainerColor = Color(0xFF00FF88),
+                            selectedLabelColor = Color.Black
+                        )
+                    )
+                }
             }
 
             Row(
@@ -604,24 +642,43 @@ fun GripCameraScreen() {
                 }
             }
 
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .background(Color(0xCC10181C), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 14.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = "Target: ${currentTarget.gripName} (Bevel ${currentTarget.targetBevel})",
+                    color = Color(0xFF00FF88),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    maxLines = 1
+                )
+            }
+
             metrics.habitAlert?.let { alertMsg ->
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 6.dp)
-                        .background(Color(0xDDFF3B30), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .background(Color(0xE6FF3B30), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
                 ) {
                     Text(
                         text = alertMsg,
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        fontSize = 12.sp,
+                        maxLines = 1
                     )
                 }
             }
         }
 
+        // Bottom Controls & Metric Gauges
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -653,18 +710,21 @@ fun GripCameraScreen() {
                         GripMetricGauge(
                             label = "Grip Lock",
                             value = "${metrics.lockScore}%",
-                            ringColor = Color(0xFF00FF88),
+                            progressFraction = metrics.lockScore / 100f,
+                            ringColor = if (metrics.lockScore >= 80) Color(0xFF00FF88) else Color(0xFF00E5FF),
                             modifier = Modifier.weight(1f)
                         )
                         GripMetricGauge(
                             label = "Detected",
                             value = metrics.detectedBevel,
+                            progressFraction = 0.75f,
                             ringColor = Color(0xFF00E5FF),
                             modifier = Modifier.weight(1f)
                         )
                         GripMetricGauge(
                             label = "Fingers",
                             value = metrics.fingerSpreadStatus,
+                            progressFraction = if (metrics.fingerSpreadStatus == "Relaxed") 0.85f else 0.5f,
                             ringColor = Color(0xFF00E5FF),
                             modifier = Modifier.weight(1f)
                         )
@@ -685,64 +745,46 @@ fun GripCameraScreen() {
 }
 
 // ==========================================
-// 4. 8-BEVEL OCTAGON & HAND CONTOUR UI
+// 4. 8-BEVEL OCTAGON & FINGER CONTOUR UI
 // ==========================================
 
 @Composable
 fun BevelOctagonOverlay(
     targetBevel: Int,
-    gripName: String,
     isLocked: Boolean,
     isLeftHanded: Boolean
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val cx = size.width * 0.5f
-            val cy = size.height * 0.48f
-            val radius = size.width * 0.24f
-            val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f), 0f)
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val cx = size.width * 0.5f
+        val cy = size.height * 0.48f
+        val radius = size.width * 0.24f
+        val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 12f), 0f)
 
-            val path = Path()
-            for (i in 0 until 8) {
-                val angle = (i * 45.0 - 112.5) * PI / 180.0
-                val x = cx + (radius * cos(angle)).toFloat()
-                val y = cy + (radius * sin(angle)).toFloat()
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            path.close()
-
-            drawPath(
-                path = path,
-                color = if (isLocked) Color(0xAA00FF88) else Color(0x8800E5FF),
-                style = Stroke(width = 8f, pathEffect = if (isLocked) null else dash)
-            )
-
-            val mappedBevel = if (isLeftHanded && targetBevel in 2..4) (10 - targetBevel) else targetBevel
-            val targetAngle = ((mappedBevel - 1) * 45.0 - 90.0) * PI / 180.0
-            val tx = cx + (radius * cos(targetAngle)).toFloat()
-            val ty = cy + (radius * sin(targetAngle)).toFloat()
-
-            drawCircle(
-                color = Color(0xFF00FF88),
-                radius = 18f,
-                center = Offset(tx, ty)
-            )
+        val path = Path()
+        for (i in 0 until 8) {
+            val angle = (i * 45.0 - 112.5) * PI / 180.0
+            val x = cx + (radius * cos(angle)).toFloat()
+            val y = cy + (radius * sin(angle)).toFloat()
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
+        path.close()
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(y = (-135).dp)
-                .background(Color(0xBB10181C), RoundedCornerShape(20.dp))
-                .padding(horizontal = 14.dp, vertical = 6.dp)
-        ) {
-            Text(
-                text = "Target: $gripName (Bevel $targetBevel)",
-                color = Color(0xFF00FF88),
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp
-            )
-        }
+        drawPath(
+            path = path,
+            color = if (isLocked) Color(0xAA00FF88) else Color(0x8800E5FF),
+            style = Stroke(width = 7f, pathEffect = if (isLocked) null else dash)
+        )
+
+        val mappedBevel = if (isLeftHanded && targetBevel in 2..4) (10 - targetBevel) else targetBevel
+        val targetAngle = ((mappedBevel - 1) * 45.0 - 90.0) * PI / 180.0
+        val tx = cx + (radius * cos(targetAngle)).toFloat()
+        val ty = cy + (radius * sin(targetAngle)).toFloat()
+
+        drawCircle(
+            color = Color(0xFF00FF88),
+            radius = 15f,
+            center = Offset(tx, ty)
+        )
     }
 }
 
@@ -760,24 +802,72 @@ fun HandSkeletonOverlay(
 
         fun pt(index: Int): Offset = Offset(landmarks[index].x * w, landmarks[index].y * h)
 
+        // Helper to offset a point perpendicular to a segment for natural finger thickness
+        fun offsetPerp(base: SmoothedPoint, refA: SmoothedPoint, refB: SmoothedPoint, amountPx: Float): Offset {
+            val vx = refB.x - refA.x
+            val vy = refB.y - refA.y
+            val len = hypot(vx.toDouble(), vy.toDouble()).toFloat().coerceAtLeast(0.0001f)
+            val nx = -vy / len
+            val ny = vx / len
+            return Offset(base.x * w + nx * amountPx, base.y * h + ny * amountPx)
+        }
+
+        val fingerHalfWidth = 3.5.dp.toPx()
+        val thumbHalfWidth = 4.5.dp.toPx()
+
+        val wrist = pt(0)
+        val thumbCmc = landmarks[1]
+        val thumbMcp = landmarks[2]
+        val thumbIp = landmarks[3]
+        val thumbTip = landmarks[4]
+
+        val indexMcp = landmarks[5]
+        val indexPip = landmarks[6]
+        val indexTip = landmarks[8]
+
+        val middleMcp = landmarks[9]
+        val middlePip = landmarks[10]
+        val middleTip = landmarks[12]
+
+        val ringMcp = landmarks[13]
+        val ringPip = landmarks[14]
+        val ringTip = landmarks[16]
+
+        val pinkyMcp = landmarks[17]
+        val pinkyPip = landmarks[18]
+        val pinkyTip = landmarks[20]
+
+        // Trace each digit up and back down so individual fingers read clearly
         val contourPoints = listOf(
-            pt(0),
-            pt(1),
-            pt(2),
-            pt(3),
-            pt(4),
-            pt(8),
-            pt(12),
-            pt(16),
-            pt(20),
-            pt(17),
-            pt(0)
+            wrist,
+            offsetPerp(thumbCmc, wrist, thumbMcp, -thumbHalfWidth),
+            offsetPerp(thumbMcp, thumbCmc, thumbIp, -thumbHalfWidth),
+            offsetPerp(thumbIp, thumbMcp, thumbTip, -thumbHalfWidth),
+            Offset(thumbTip.x * w, thumbTip.y * h),
+            offsetPerp(thumbIp, thumbMcp, thumbTip, thumbHalfWidth),
+            offsetPerp(indexMcp, wrist, indexTip, -fingerHalfWidth),
+            offsetPerp(indexPip, indexMcp, indexTip, -fingerHalfWidth),
+            Offset(indexTip.x * w, indexTip.y * h),
+            offsetPerp(indexPip, indexMcp, indexTip, fingerHalfWidth),
+            offsetPerp(middleMcp, wrist, middleTip, -fingerHalfWidth),
+            offsetPerp(middlePip, middleMcp, middleTip, -fingerHalfWidth),
+            Offset(middleTip.x * w, middleTip.y * h),
+            offsetPerp(middlePip, middleMcp, middleTip, fingerHalfWidth),
+            offsetPerp(ringMcp, wrist, ringTip, -fingerHalfWidth),
+            offsetPerp(ringPip, ringMcp, ringTip, -fingerHalfWidth),
+            Offset(ringTip.x * w, ringTip.y * h),
+            offsetPerp(ringPip, ringMcp, ringTip, fingerHalfWidth),
+            offsetPerp(pinkyMcp, wrist, pinkyTip, -fingerHalfWidth),
+            offsetPerp(pinkyPip, pinkyMcp, pinkyTip, -fingerHalfWidth),
+            Offset(pinkyTip.x * w, pinkyTip.y * h),
+            offsetPerp(pinkyPip, pinkyMcp, pinkyTip, fingerHalfWidth),
+            offsetPerp(pinkyMcp, wrist, pinkyTip, fingerHalfWidth),
+            wrist
         )
 
         val outlinePath = Path().apply {
             if (contourPoints.size >= 3) {
                 moveTo(contourPoints.first().x, contourPoints.first().y)
-
                 for (i in 1 until contourPoints.lastIndex) {
                     val curr = contourPoints[i]
                     val next = contourPoints[i + 1]
@@ -785,45 +875,43 @@ fun HandSkeletonOverlay(
                     val midY = (curr.y + next.y) * 0.5f
                     quadraticBezierTo(curr.x, curr.y, midX, midY)
                 }
-
-                val last = contourPoints.last()
-                lineTo(last.x, last.y)
+                lineTo(contourPoints.last().x, contourPoints.last().y)
             }
         }
 
-        val wrist = pt(0)
-        val middleTip = pt(12)
+        val middleTop = Offset(middleTip.x * w, middleTip.y * h)
         val primaryColor = when {
             metrics.habitAlert != null -> Color(0xFFFF3B30)
             metrics.lockScore >= 80 -> Color(0xFF00FF88)
             else -> Color(0xFFF2F4F7)
         }
 
+        // Fades softly toward the wrist just like the reference contour[span_2](start_span)[span_2](end_span)
         val strokeBrush = Brush.linearGradient(
             colors = listOf(
-                primaryColor.copy(alpha = 0.12f),
-                primaryColor.copy(alpha = 0.75f),
+                primaryColor.copy(alpha = 0.08f),
+                primaryColor.copy(alpha = 0.72f),
                 primaryColor
             ),
             start = wrist,
-            end = middleTip
+            end = middleTop
         )
 
         val glowBrush = Brush.linearGradient(
             colors = listOf(
                 primaryColor.copy(alpha = 0.0f),
-                primaryColor.copy(alpha = 0.22f),
-                primaryColor.copy(alpha = 0.30f)
+                primaryColor.copy(alpha = 0.20f),
+                primaryColor.copy(alpha = 0.28f)
             ),
             start = wrist,
-            end = middleTip
+            end = middleTop
         )
 
         drawPath(
             path = outlinePath,
             brush = glowBrush,
             style = Stroke(
-                width = 12.dp.toPx(),
+                width = 10.dp.toPx(),
                 cap = StrokeCap.Round
             )
         )
@@ -832,22 +920,21 @@ fun HandSkeletonOverlay(
             path = outlinePath,
             brush = strokeBrush,
             style = Stroke(
-                width = 5.dp.toPx(),
+                width = 4.dp.toPx(),
                 cap = StrokeCap.Round
             )
         )
 
-        drawCircle(
-            color = Color(0xFFFFEE00).copy(alpha = 0.85f),
-            radius = 6.dp.toPx(),
-            center = pt(5)
-        )
-
         if (showLandmarkPoints) {
+            drawCircle(
+                color = Color(0xFFFFEE00),
+                radius = 7.dp.toPx(),
+                center = pt(5)
+            )
             landmarks.forEachIndexed { idx, lm ->
                 if (idx != 5) {
                     drawCircle(
-                        color = Color.White.copy(alpha = 0.55f),
+                        color = Color.White.copy(alpha = 0.65f),
                         radius = 3.dp.toPx(),
                         center = Offset(lm.x * w, lm.y * h)
                     )
@@ -861,9 +948,15 @@ fun HandSkeletonOverlay(
 fun GripMetricGauge(
     label: String,
     value: String,
+    progressFraction: Float,
     ringColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val animatedSweep by animateFloatAsState(
+        targetValue = (progressFraction.coerceIn(0f, 1f) * 360f),
+        label = "gaugeSweep"
+    )
+
     Column(
         modifier = modifier.padding(horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -871,13 +964,17 @@ fun GripMetricGauge(
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(74.dp)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawArc(
-                    color = ringColor.copy(alpha = 0.25f),
-                    startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                    color = ringColor.copy(alpha = 0.22f),
+                    startAngle = 0f,
+                    sweepAngle = 360f,
+                    useCenter = false,
                     style = Stroke(width = 7.dp.toPx())
                 )
                 drawArc(
                     color = ringColor,
-                    startAngle = -90f, sweepAngle = 285f, useCenter = false,
+                    startAngle = -90f,
+                    sweepAngle = animatedSweep,
+                    useCenter = false,
                     style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
                 )
             }
@@ -885,7 +982,7 @@ fun GripMetricGauge(
                 text = value,
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
+                fontSize = if (value.length > 7) 11.sp else 13.sp,
                 maxLines = 1
             )
         }
