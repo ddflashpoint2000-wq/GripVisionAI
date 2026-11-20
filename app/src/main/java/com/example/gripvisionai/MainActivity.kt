@@ -27,9 +27,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.PathJoin
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +50,7 @@ import java.util.concurrent.Executors
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
@@ -149,8 +152,14 @@ fun getGripTarget(sport: GripSport, shot: ShotPreset): GripTarget {
     }
 }
 
+data class SmoothedPoint(
+    val x: Float,
+    val y: Float,
+    val z: Float = 0f
+)
+
 data class GripMetrics(
-    val landmarks: List<NormalizedLandmark> = emptyList(),
+    val landmarks: List<SmoothedPoint> = emptyList(),
     val lockScore: Int = 0,
     val detectedBevel: String = "Bevel --",
     val fingerSpreadStatus: String = "Ready",
@@ -164,6 +173,8 @@ data class GripMetrics(
 
 class GripAnalyzer(
     context: Context,
+    private val smoothingAlpha: Float = 0.35f,
+    private val maxStepJump: Float = 0.22f,
     private val onMetricsUpdated: (GripMetrics) -> Unit
 ) {
     var sport: GripSport = GripSport.TENNIS
@@ -172,6 +183,7 @@ class GripAnalyzer(
     var isFrozen: Boolean = false
 
     private var handLandmarker: HandLandmarker? = null
+    private var smoothedLandmarks: List<SmoothedPoint>? = null
 
     init {
         try {
@@ -217,10 +229,12 @@ class GripAnalyzer(
 
                 val result = handLandmarker?.detect(mpImage)
                 if (result != null && result.landmarks().isNotEmpty()) {
-                    val landmarks = result.landmarks()[0]
-                    val computed = computeMetrics(landmarks, sport, shot)
+                    val rawLandmarks = result.landmarks()[0]
+                    val steadyLandmarks = smoothLandmarks(rawLandmarks)
+                    val computed = computeMetrics(steadyLandmarks, sport, shot)
                     onMetricsUpdated(computed)
                 } else {
+                    smoothedLandmarks = null
                     onMetricsUpdated(
                         GripMetrics(coachingTip = "No hand detected. Center your grip inside the guide.")
                     )
@@ -232,8 +246,45 @@ class GripAnalyzer(
         imageProxy.close()
     }
 
+    private fun smoothLandmarks(raw: List<NormalizedLandmark>): List<SmoothedPoint> {
+        val prev = smoothedLandmarks
+        if (prev == null || prev.size != raw.size) {
+            val initial = raw.map { lm -> SmoothedPoint(lm.x(), lm.y(), lm.z()) }
+            smoothedLandmarks = initial
+            return initial
+        }
+
+        val alpha = smoothingAlpha.coerceIn(0.05f, 1.0f)
+        val updated = raw.mapIndexed { idx, lm ->
+            val p = prev[idx]
+            val dx = lm.x() - p.x
+            val dy = lm.y() - p.y
+            val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat()
+
+            // Clamp sudden single-frame glitches while allowing intentional fast hand movement
+            val clampedTargetX = if (dist > maxStepJump && dist > 0f) {
+                p.x + (dx / dist) * maxStepJump
+            } else {
+                lm.x()
+            }
+            val clampedTargetY = if (dist > maxStepJump && dist > 0f) {
+                p.y + (dy / dist) * maxStepJump
+            } else {
+                lm.y()
+            }
+
+            SmoothedPoint(
+                x = alpha * clampedTargetX + (1f - alpha) * p.x,
+                y = alpha * clampedTargetY + (1f - alpha) * p.y,
+                z = alpha * lm.z() + (1f - alpha) * p.z
+            )
+        }
+        smoothedLandmarks = updated
+        return updated
+    }
+
     private fun computeMetrics(
-        landmarks: List<NormalizedLandmark>,
+        landmarks: List<SmoothedPoint>,
         sport: GripSport,
         shot: ShotPreset
     ): GripMetrics {
@@ -242,8 +293,8 @@ class GripAnalyzer(
         val wrist = landmarks[0]
         val indexKnuckle = landmarks[5]
 
-        val dx = indexKnuckle.x() - wrist.x()
-        val dy = indexKnuckle.y() - wrist.y()
+        val dx = indexKnuckle.x - wrist.x
+        val dy = indexKnuckle.y - wrist.y
         val angleDeg = (atan2(dy.toDouble(), dx.toDouble()) * 180.0 / PI).toFloat()
 
         val normalizedAngle = (angleDeg + 180f) % 360f
@@ -267,6 +318,11 @@ class GripAnalyzer(
             habitAlert = habitAlert,
             coachingTip = target.tip
         )
+    }
+
+    fun close() {
+        handLandmarker?.close()
+        handLandmarker = null
     }
 
     private fun ImageProxy.toBitmap(): Bitmap {
@@ -326,7 +382,10 @@ fun GripCameraScreen() {
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
     DisposableEffect(Unit) {
-        onDispose { cameraExecutor.shutdown() }
+        onDispose {
+            cameraExecutor.shutdown()
+            analyzer.close()
+        }
     }
 
     Box(
@@ -573,7 +632,7 @@ fun GripCameraScreen() {
 }
 
 // ==========================================
-// 4. 8-BEVEL OCTAGON & 21-POINT HAND UI
+// 4. 8-BEVEL OCTAGON & HAND CONTOUR UI
 // ==========================================
 
 @Composable
@@ -635,37 +694,114 @@ fun BevelOctagonOverlay(
 }
 
 @Composable
-fun HandSkeletonOverlay(metrics: GripMetrics) {
+fun HandSkeletonOverlay(
+    metrics: GripMetrics,
+    showLandmarkPoints: Boolean = false
+) {
     val landmarks = metrics.landmarks
-    if (landmarks.isEmpty()) return
-
-    val connections = listOf(
-        0 to 1, 1 to 2, 2 to 3, 3 to 4,
-        0 to 5, 5 to 6, 6 to 7, 7 to 8,
-        5 to 9, 9 to 10, 10 to 11, 11 to 12,
-        9 to 13, 13 to 14, 14 to 15, 15 to 16,
-        13 to 17, 17 to 18, 18 to 19, 19 to 20,
-        0 to 17
-    )
+    if (landmarks.size < 21) return
 
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val lineColor = if (metrics.habitAlert == null) Color(0xFF00FF88) else Color(0xFFFF3B30)
+        val w = size.width
+        val h = size.height
 
-        connections.forEach { (a, b) ->
-            if (a < landmarks.size && b < landmarks.size) {
-                val start = Offset(landmarks[a].x() * size.width, landmarks[a].y() * size.height)
-                val end = Offset(landmarks[b].x() * size.width, landmarks[b].y() * size.height)
-                drawLine(color = lineColor, start = start, end = end, strokeWidth = 8f, cap = StrokeCap.Round)
+        fun pt(index: Int): Offset = Offset(landmarks[index].x * w, landmarks[index].y * h)
+
+        val contourPoints = listOf(
+            pt(0),
+            pt(1),
+            pt(2),
+            pt(3),
+            pt(4),
+            pt(8),
+            pt(12),
+            pt(16),
+            pt(20),
+            pt(17),
+            pt(0)
+        )
+
+        val outlinePath = Path().apply {
+            if (contourPoints.size >= 3) {
+                moveTo(contourPoints.first().x, contourPoints.first().y)
+
+                for (i in 1 until contourPoints.lastIndex) {
+                    val curr = contourPoints[i]
+                    val next = contourPoints[i + 1]
+                    val midX = (curr.x + next.x) * 0.5f
+                    val midY = (curr.y + next.y) * 0.5f
+                    quadraticTo(curr.x, curr.y, midX, midY)
+                }
+
+                val last = contourPoints.last()
+                lineTo(last.x, last.y)
             }
         }
 
-        landmarks.forEachIndexed { idx, pt ->
-            val isIndexKnuckle = idx == 5
-            drawCircle(
-                color = if (isIndexKnuckle) Color(0xFFFFEE00) else Color.White,
-                radius = if (isIndexKnuckle) 16f else 9f,
-                center = Offset(pt.x() * size.width, pt.y() * size.height)
+        val wrist = pt(0)
+        val middleTip = pt(12)
+        val primaryColor = when {
+            metrics.habitAlert != null -> Color(0xFFFF3B30)
+            metrics.lockScore >= 80 -> Color(0xFF00FF88)
+            else -> Color(0xFFF2F4F7)
+        }
+
+        val strokeBrush = Brush.linearGradient(
+            colors = listOf(
+                primaryColor.copy(alpha = 0.12f),
+                primaryColor.copy(alpha = 0.75f),
+                primaryColor
+            ),
+            start = wrist,
+            end = middleTip
+        )
+
+        val glowBrush = Brush.linearGradient(
+            colors = listOf(
+                primaryColor.copy(alpha = 0.0f),
+                primaryColor.copy(alpha = 0.22f),
+                primaryColor.copy(alpha = 0.30f)
+            ),
+            start = wrist,
+            end = middleTip
+        )
+
+        drawPath(
+            path = outlinePath,
+            brush = glowBrush,
+            style = Stroke(
+                width = 12.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = PathJoin.Round
             )
+        )
+
+        drawPath(
+            path = outlinePath,
+            brush = strokeBrush,
+            style = Stroke(
+                width = 5.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = PathJoin.Round
+            )
+        )
+
+        drawCircle(
+            color = Color(0xFFFFEE00).copy(alpha = 0.85f),
+            radius = 6.dp.toPx(),
+            center = pt(5)
+        )
+
+        if (showLandmarkPoints) {
+            landmarks.forEachIndexed { idx, lm ->
+                if (idx != 5) {
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.55f),
+                        radius = 3.dp.toPx(),
+                        center = Offset(lm.x * w, lm.y * h)
+                    )
+                }
+            }
         }
     }
 }
