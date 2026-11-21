@@ -62,6 +62,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -931,7 +932,6 @@ fun HandleBottomBevelOverlay(
         )
         onTargetPointComputed(targetPointPx, size)
 
-        // Bottom of racket handle / butt-cap silhouette to place the handle end into
         if (showBottomSilhouette) {
             rotate(degrees = tiltDegrees, pivot = Offset(centerX, centerY)) {
                 val left = centerX - capWidth * 0.5f
@@ -971,7 +971,6 @@ fun HandleBottomBevelOverlay(
             }
         }
 
-        // Bevel numbers 1-8 (clockwise for right-handed, anti-clockwise for left-handed)
         val textPaint = android.graphics.Paint().apply {
             textAlign = android.graphics.Paint.Align.CENTER
             textSize = 11.sp.toPx()
@@ -1034,7 +1033,6 @@ fun BaseKnuckleSpotOverlay(
         val w = size.width
         val h = size.height
 
-        // Landmark 5 tracks the index base knuckle on either palm or back of hand
         val knucklePoint = Offset(landmarks[5].x * w, landmarks[5].y * h)
         val activeColor = if (isLocked) Color(0xFF00FF88) else knuckleColor
 
