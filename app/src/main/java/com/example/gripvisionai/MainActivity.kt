@@ -58,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -634,35 +635,37 @@ fun GripVisionApp() {
             isLeftHanded = isLeftHanded,
             isLocked = (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && lockScore == 100),
             showSilhouette = (currentStep == ScanStep.STEP_1_HANDLE_CAPTURE && snappedHandleBitmap == null),
-            onTargetPointComputed = { targetCenterPx, screenSize ->
+            onTargetPointComputed = { targetCenterPx: Offset, screenSize: Size ->
                 if (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && handState.hands.isNotEmpty()) {
                     val primaryHand = selectAnchorHand(handState.hands, isLeftHanded)
                     if (primaryHand != null && primaryHand.landmarks.size >= 21) {
                         val knuckleLm = primaryHand.landmarks[5] // Index base knuckle
+                        val frameWidth = screenSize.width
+                        val frameHeight = screenSize.height
                         val knucklePx = Offset(
-                            knuckleLm.x * screenSize.width,
-                            knuckleLm.y * screenSize.height
+                            knuckleLm.x * frameWidth,
+                            knuckleLm.y * frameHeight
                         )
                         val distPx = hypot(
                             (knucklePx.x - targetCenterPx.x).toDouble(),
                             (knucklePx.y - targetCenterPx.y).toDouble()
                         ).toFloat()
 
-                        val snapRadiusPx = screenSize.width * 0.11f
-                        val releaseRadiusPx = screenSize.width * 0.135f
-                        val maxRadiusPx = screenSize.width * 0.34f
+                        val snapRadiusPx = frameWidth * 0.11f
+                        val releaseRadiusPx = frameWidth * 0.135f
+                        val maxRadiusPx = frameWidth * 0.34f
+                        val spanPx = (maxRadiusPx - snapRadiusPx).coerceAtLeast(1f)
 
                         val baseScore = when {
                             lockScore == 100 && distPx <= releaseRadiusPx -> 100
                             distPx <= snapRadiusPx -> 100
                             distPx >= maxRadiusPx -> 15
                             else -> {
-                                val ratio = 1f - ((distPx - snapRadiusPx) / (maxRadiusPx - snapRadiusPx))
-                                (20 + ratio * 75f).toInt().coerceIn(15, 99)
+                                val ratio = 1f - ((distPx - snapRadiusPx) / spanPx)
+                                (20f + ratio * 75f).toInt().coerceIn(15, 99)
                             }
                         }
 
-                        // For 2H, reward having both hands visible while keeping primary knuckle lock clear
                         lockScore = if (isTwoHandedBackhand && baseScore == 100 && handState.hands.size < 2) {
                             92
                         } else {
