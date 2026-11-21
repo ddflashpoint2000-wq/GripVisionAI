@@ -58,7 +58,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -75,13 +74,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.components.containers.Category
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -142,11 +141,19 @@ val BEVEL_COLORS: Map<Int, Color> = mapOf(
     8 to Color(0xFF40C4FF)  // Sky Blue
 )
 
+val DOMINANT_HAND_COLOR = Color(0xFF00FF88) // Neon Green for dominant/anchor hand
+val SUPPORT_HAND_COLOR = Color(0xFF00E5FF)  // Cyan for supporting top hand
+
 fun getGripTarget(
     sport: GripSport,
     shot: ShotPreset,
-    backhandStyle: BackhandStyle
+    backhandStyle: BackhandStyle,
+    isLeftHanded: Boolean
 ): GripTarget {
+    val playerSide = if (isLeftHanded) "Left-Handed" else "Right-Handed"
+    val anchorLabel = if (isLeftHanded) "left" else "right"
+    val topHandLabel = if (isLeftHanded) "right" else "left"
+
     return when (sport) {
         GripSport.TENNIS -> when (shot) {
             ShotPreset.SERVE_VOLLEY -> GripTarget(
@@ -172,11 +179,11 @@ fun getGripTarget(
                     fullGripInfo = "One-Handed Eastern Backhand (Bevel 1): Places your index base knuckle on top Bevel 1 to firm up the wrist for single-handed drives."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
-                    gripName = "Continental Anchor (2H)",
+                    gripName = "Two-Handed Backhand (2H)",
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
-                    shortInstruction = "Place your bottom index base knuckle on Bevel 2.",
-                    fullGripInfo = "Two-Handed Backhand Bottom Hand (Bevel 2): Anchors your bottom hand on Bevel 2 while your top hand drives topspin and power."
+                    shortInstruction = "$playerSide: green spot = $anchorLabel base knuckle, cyan spot = $topHandLabel top knuckle.",
+                    fullGripInfo = "Two-Handed Backhand ($playerSide): Anchors your $anchorLabel index knuckle (green) near Bevel 2 while your $topHandLabel index knuckle (cyan) positions above for leverage and topspin."
                 )
             }
         }
@@ -267,13 +274,18 @@ data class SmoothedPoint(
     val z: Float = 0f
 )
 
+data class TrackedHand(
+    val landmarks: List<SmoothedPoint>,
+    val isLeftDetected: Boolean?
+)
+
 data class HandTrackingState(
-    val landmarks: List<SmoothedPoint> = emptyList(),
+    val hands: List<TrackedHand> = emptyList(),
     val isHandVisible: Boolean = false
 )
 
 // ==========================================
-// 2. MEDIAPIPE HAND TRACKER (SHARPENED)
+// 2. MEDIAPIPE HAND TRACKER (1 OR 2 HANDS)
 // ==========================================
 
 class GripHandTracker(
@@ -286,7 +298,7 @@ class GripHandTracker(
     var onHandleSnapped: ((Bitmap) -> Unit)? = null
 
     private var handLandmarker: HandLandmarker? = null
-    private var smoothedLandmarks: List<SmoothedPoint>? = null
+    private var smoothedSlots: MutableList<List<SmoothedPoint>> = mutableListOf()
     private var lastValidTimestampMs: Long = 0L
     private val dropoutGraceMs: Long = 280L
 
@@ -299,7 +311,7 @@ class GripHandTracker(
             val options = HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(baseOptions)
                 .setRunningMode(RunningMode.IMAGE)
-                .setNumHands(1)
+                .setNumHands(2)
                 .setMinHandDetectionConfidence(0.26f)
                 .setMinHandPresenceConfidence(0.26f)
                 .setMinTrackingConfidence(0.28f)
@@ -311,7 +323,7 @@ class GripHandTracker(
         }
     }
 
-    fun processFrame(imageProxy: ImageProxy, runHandDetection: Boolean) {
+    fun processFrame(imageProxy: ImageProxy, runHandDetection: Boolean, maxHands: Int) {
         try {
             val needsBitmap = captureNextFrame || runHandDetection
             if (!needsBitmap) return
@@ -346,17 +358,42 @@ class GripHandTracker(
             val result = landmarker.detect(mpImage)
             val now = System.currentTimeMillis()
 
-            if (result.landmarks().isNotEmpty()) {
-                val steady = smoothLandmarks(result.landmarks()[0])
+            val rawHands = result.landmarks().take(maxHands.coerceIn(1, 2))
+            val handednessLists: List<List<Category>> = result.handednesses()
+
+            if (rawHands.isNotEmpty()) {
+                val updatedSlots = mutableListOf<List<SmoothedPoint>>()
+                val trackedHands = rawHands.mapIndexed { slotIdx, lmList ->
+                    val prevSlot = smoothedSlots.getOrNull(slotIdx)
+                    val smoothed = smoothHand(lmList, prevSlot)
+                    updatedSlots.add(smoothed)
+
+                    val handednessLabel = handednessLists
+                        .getOrNull(slotIdx)
+                        ?.firstOrNull()
+                        ?.categoryName()
+                        ?.lowercase()
+
+                    val isLeft = when {
+                        handednessLabel == null -> null
+                        handednessLabel.contains("left") -> true
+                        handednessLabel.contains("right") -> false
+                        else -> null
+                    }
+                    TrackedHand(landmarks = smoothed, isLeftDetected = isLeft)
+                }
+                smoothedSlots = updatedSlots
                 lastValidTimestampMs = now
-                onHandUpdated(HandTrackingState(landmarks = steady, isHandVisible = true))
+                onHandUpdated(HandTrackingState(hands = trackedHands, isHandVisible = true))
             } else {
-                val cached = smoothedLandmarks
-                if (cached != null && (now - lastValidTimestampMs) <= dropoutGraceMs) {
-                    onHandUpdated(HandTrackingState(landmarks = cached, isHandVisible = true))
+                if (smoothedSlots.isNotEmpty() && (now - lastValidTimestampMs) <= dropoutGraceMs) {
+                    val cachedHands = smoothedSlots.take(maxHands).map { slot ->
+                        TrackedHand(landmarks = slot, isLeftDetected = null)
+                    }
+                    onHandUpdated(HandTrackingState(hands = cachedHands, isHandVisible = true))
                 } else {
-                    smoothedLandmarks = null
-                    onHandUpdated(HandTrackingState(landmarks = emptyList(), isHandVisible = false))
+                    smoothedSlots.clear()
+                    onHandUpdated(HandTrackingState(hands = emptyList(), isHandVisible = false))
                 }
             }
         } catch (e: Exception) {
@@ -366,15 +403,15 @@ class GripHandTracker(
         }
     }
 
-    private fun smoothLandmarks(raw: List<NormalizedLandmark>): List<SmoothedPoint> {
-        val prev = smoothedLandmarks
+    private fun smoothHand(
+        raw: List<NormalizedLandmark>,
+        prev: List<SmoothedPoint>?
+    ): List<SmoothedPoint> {
         if (prev == null || prev.size != raw.size) {
-            val initial = raw.map { lm -> SmoothedPoint(lm.x(), lm.y(), lm.z()) }
-            smoothedLandmarks = initial
-            return initial
+            return raw.map { lm -> SmoothedPoint(lm.x(), lm.y(), lm.z()) }
         }
 
-        val updated = raw.mapIndexed { idx, lm ->
+        return raw.mapIndexed { idx, lm ->
             val p = prev[idx]
             val dx = lm.x() - p.x
             val dy = lm.y() - p.y
@@ -391,7 +428,6 @@ class GripHandTracker(
                 lm.y()
             }
 
-            // Adaptive alpha: dampens tiny jitter when nearly still, responds faster on clear movement
             val speedFactor = (dist / 0.08f).coerceIn(0.45f, 1.35f)
             val alpha = (baseAlpha * speedFactor).coerceIn(0.22f, 0.72f)
 
@@ -401,12 +437,10 @@ class GripHandTracker(
                 z = alpha * lm.z() + (1f - alpha) * p.z
             )
         }
-        smoothedLandmarks = updated
-        return updated
     }
 
     fun resetSmoothing() {
-        smoothedLandmarks = null
+        smoothedSlots.clear()
     }
 
     fun close() {
@@ -489,7 +523,12 @@ fun GripVisionApp() {
     var handState by remember { mutableStateOf(HandTrackingState()) }
     var lockScore by remember { mutableIntStateOf(0) }
 
-    val currentTarget = getGripTarget(selectedSport, selectedShot, backhandStyle)
+    val isTwoHandedBackhand =
+        selectedSport == GripSport.TENNIS &&
+            selectedShot == ShotPreset.BACKHAND_DINK &&
+            backhandStyle == BackhandStyle.TWO_HANDED
+
+    val currentTarget = getGripTarget(selectedSport, selectedShot, backhandStyle, isLeftHanded)
 
     val tracker = remember {
         GripHandTracker(context) { newState ->
@@ -501,6 +540,10 @@ fun GripVisionApp() {
         tracker.onHandleSnapped = { bitmap ->
             snappedHandleBitmap = bitmap
         }
+    }
+
+    LaunchedEffect(isTwoHandedBackhand) {
+        tracker.resetSmoothing()
     }
 
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -537,7 +580,8 @@ fun GripVisionApp() {
                                     it.setAnalyzer(cameraExecutor) { proxy ->
                                         tracker.processFrame(
                                             imageProxy = proxy,
-                                            runHandDetection = (currentStep == ScanStep.STEP_2_HAND_PLACEMENT)
+                                            runHandDetection = (currentStep == ScanStep.STEP_2_HAND_PLACEMENT),
+                                            maxHands = if (isTwoHandedBackhand) 2 else 1
                                         )
                                     }
                                 }
@@ -591,29 +635,41 @@ fun GripVisionApp() {
             isLocked = (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && lockScore == 100),
             showSilhouette = (currentStep == ScanStep.STEP_1_HANDLE_CAPTURE && snappedHandleBitmap == null),
             onTargetPointComputed = { targetCenterPx, screenSize ->
-                if (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && handState.landmarks.size >= 21) {
-                    val knuckleLm = handState.landmarks[5] // Index base knuckle
-                    val knucklePx = Offset(
-                        knuckleLm.x * screenSize.width,
-                        knuckleLm.y * screenSize.height
-                    )
-                    val distPx = hypot(
-                        (knucklePx.x - targetCenterPx.x).toDouble(),
-                        (knucklePx.y - targetCenterPx.y).toDouble()
-                    ).toFloat()
+                if (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && handState.hands.isNotEmpty()) {
+                    val primaryHand = selectAnchorHand(handState.hands, isLeftHanded)
+                    if (primaryHand != null && primaryHand.landmarks.size >= 21) {
+                        val knuckleLm = primaryHand.landmarks[5] // Index base knuckle
+                        val knucklePx = Offset(
+                            knuckleLm.x * screenSize.width,
+                            knuckleLm.y * screenSize.height
+                        )
+                        val distPx = hypot(
+                            (knucklePx.x - targetCenterPx.x).toDouble(),
+                            (knucklePx.y - targetCenterPx.y).toDouble()
+                        ).toFloat()
 
-                    val snapRadiusPx = screenSize.width * 0.11f
-                    val releaseRadiusPx = screenSize.width * 0.135f
-                    val maxRadiusPx = screenSize.width * 0.34f
+                        val snapRadiusPx = screenSize.width * 0.11f
+                        val releaseRadiusPx = screenSize.width * 0.135f
+                        val maxRadiusPx = screenSize.width * 0.34f
 
-                    lockScore = when {
-                        lockScore == 100 && distPx <= releaseRadiusPx -> 100
-                        distPx <= snapRadiusPx -> 100
-                        distPx >= maxRadiusPx -> 15
-                        else -> {
-                            val ratio = 1f - ((distPx - snapRadiusPx) / (maxRadiusPx - snapRadiusPx))
-                            (20 + ratio * 75f).toInt().coerceIn(15, 99)
+                        val baseScore = when {
+                            lockScore == 100 && distPx <= releaseRadiusPx -> 100
+                            distPx <= snapRadiusPx -> 100
+                            distPx >= maxRadiusPx -> 15
+                            else -> {
+                                val ratio = 1f - ((distPx - snapRadiusPx) / (maxRadiusPx - snapRadiusPx))
+                                (20 + ratio * 75f).toInt().coerceIn(15, 99)
+                            }
                         }
+
+                        // For 2H, reward having both hands visible while keeping primary knuckle lock clear
+                        lockScore = if (isTwoHandedBackhand && baseScore == 100 && handState.hands.size < 2) {
+                            92
+                        } else {
+                            baseScore
+                        }
+                    } else {
+                        lockScore = 0
                     }
                 } else {
                     lockScore = 0
@@ -621,11 +677,13 @@ fun GripVisionApp() {
             }
         )
 
-        // Sharpened base knuckle (landmark 5) spot only
+        // Base knuckle (landmark 5) spot(s) — single spot for 1H/other shots, dual color-coded spots for 2H
         if (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && handState.isHandVisible) {
             BaseKnuckleSpotOverlay(
-                landmarks = handState.landmarks,
-                knuckleColor = currentTarget.bevelColor,
+                hands = handState.hands,
+                isLeftHanded = isLeftHanded,
+                isTwoHandedBackhand = isTwoHandedBackhand,
+                singleHandColor = currentTarget.bevelColor,
                 lockScore = lockScore
             )
         }
@@ -754,19 +812,43 @@ fun GripVisionApp() {
                 }
             }
 
-            Box(
+            Row(
                 modifier = Modifier
-                    .padding(top = 4.dp)
-                    .background(Color(0xBB10181C), RoundedCornerShape(14.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "${currentTarget.gripName} • Bevel ${currentTarget.targetBevel}",
-                    color = currentTarget.bevelColor,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    maxLines = 1
-                )
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xBB10181C), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "${currentTarget.gripName} • Bevel ${currentTarget.targetBevel}",
+                        color = currentTarget.bevelColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        maxLines = 1
+                    )
+                }
+
+                if (isTwoHandedBackhand) {
+                    val anchorHandName = if (isLeftHanded) "L" else "R"
+                    val topHandName = if (isLeftHanded) "R" else "L"
+                    Box(
+                        modifier = Modifier
+                            .background(Color(0xBB10181C), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "$anchorHandName: Green • $topHandName: Cyan",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
 
@@ -839,6 +921,8 @@ fun GripVisionApp() {
                         Text(
                             text = if (snappedHandleBitmap == null) {
                                 "Line up your racket handle with top bevel 1 and tap TAKE PIC."
+                            } else if (isTwoHandedBackhand) {
+                                "Pic taken! Bring both hands in: green dot = ${if (isLeftHanded) "left" else "right"} base knuckle, cyan dot = ${if (isLeftHanded) "right" else "left"} top knuckle."
                             } else {
                                 "Pic taken! Go to hand placement and put your ${if (isLeftHanded) "left" else "right"} base knuckle on Bevel ${currentTarget.targetBevel}."
                             },
@@ -893,7 +977,9 @@ fun GripVisionApp() {
                                 Text(
                                     text = when {
                                         lockScore == 100 -> "100% — ${currentTarget.gripName}"
+                                        !handState.isHandVisible && isTwoHandedBackhand -> "Bring both hands onto the grip"
                                         !handState.isHandVisible -> "Show your ${if (isLeftHanded) "left" else "right"} hand on the grip"
+                                        isTwoHandedBackhand && handState.hands.size < 2 -> "Bring second hand onto the grip (Green = anchor, Cyan = top)"
                                         else -> "Place your base knuckle dot on Bevel ${currentTarget.targetBevel}"
                                     },
                                     color = if (lockScore == 100) Color(0xFF00FF88) else Color.White,
@@ -920,6 +1006,14 @@ fun GripVisionApp() {
             }
         }
     }
+}
+
+private fun selectAnchorHand(hands: List<TrackedHand>, isLeftHanded: Boolean): TrackedHand? {
+    if (hands.isEmpty()) return null
+    val matching = hands.firstOrNull { hand ->
+        hand.isLeftDetected != null && hand.isLeftDetected == isLeftHanded
+    }
+    return matching ?: hands.first()
 }
 
 // ==========================================
@@ -1032,58 +1126,73 @@ fun ButtCapHandleOverlay(
 }
 
 // ==========================================
-// 5. SHARPENED BASE KNUCKLE SPOT
+// 5. BASE KNUCKLE SPOT(S) FOR 1H & 2H
 // ==========================================
 
 @Composable
 fun BaseKnuckleSpotOverlay(
-    landmarks: List<SmoothedPoint>,
-    knuckleColor: Color,
+    hands: List<TrackedHand>,
+    isLeftHanded: Boolean,
+    isTwoHandedBackhand: Boolean,
+    singleHandColor: Color,
     lockScore: Int
 ) {
-    if (landmarks.size < 21) return
+    if (hands.isEmpty()) return
 
     val isLocked = lockScore == 100
     val proximityRatio = (lockScore / 100f).coerceIn(0f, 1f)
+    val anchorHand = selectAnchorHand(hands, isLeftHanded)
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
-        val knucklePoint = Offset(landmarks[5].x * w, landmarks[5].y * h)
-        val activeColor = if (isLocked) Color(0xFF00FF88) else knuckleColor
+        hands.forEach { hand ->
+            if (hand.landmarks.size < 21) return@forEach
+            val knucklePoint = Offset(hand.landmarks[5].x * w, hand.landmarks[5].y * h)
 
-        // Outer ring tightens onto the spot as proximity approaches 100%
-        val outerRingRadius = (26.dp - (8.dp * proximityRatio)).toPx()
-        drawCircle(
-            color = activeColor.copy(alpha = if (isLocked) 0.35f else 0.22f),
-            radius = outerRingRadius,
-            center = knucklePoint
-        )
-        drawCircle(
-            color = activeColor.copy(alpha = 0.85f),
-            radius = outerRingRadius,
-            center = knucklePoint,
-            style = Stroke(width = if (isLocked) 2.5.dp.toPx() else 1.5.dp.toPx())
-        )
+            val isAnchor = (hand === anchorHand)
+            val spotColor = when {
+                !isTwoHandedBackhand -> if (isLocked) Color(0xFF00FF88) else singleHandColor
+                isAnchor -> if (isLocked) Color(0xFF00FF88) else DOMINANT_HAND_COLOR
+                else -> SUPPORT_HAND_COLOR
+            }
 
-        // Crisp spot core
-        drawCircle(
-            color = activeColor,
-            radius = 9.5.dp.toPx(),
-            center = knucklePoint
-        )
-        drawCircle(
-            color = Color.White,
-            radius = 9.5.dp.toPx(),
-            center = knucklePoint,
-            style = Stroke(width = 2.dp.toPx())
-        )
-        drawCircle(
-            color = Color.White,
-            radius = 2.5.dp.toPx(),
-            center = knucklePoint
-        )
+            val outerRingRadius = if (isAnchor || !isTwoHandedBackhand) {
+                (26.dp - (8.dp * proximityRatio)).toPx()
+            } else {
+                20.dp.toPx()
+            }
+
+            drawCircle(
+                color = spotColor.copy(alpha = if (isLocked && isAnchor) 0.35f else 0.24f),
+                radius = outerRingRadius,
+                center = knucklePoint
+            )
+            drawCircle(
+                color = spotColor.copy(alpha = 0.9f),
+                radius = outerRingRadius,
+                center = knucklePoint,
+                style = Stroke(width = if (isLocked && isAnchor) 2.5.dp.toPx() else 1.5.dp.toPx())
+            )
+
+            drawCircle(
+                color = spotColor,
+                radius = 9.5.dp.toPx(),
+                center = knucklePoint
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 9.5.dp.toPx(),
+                center = knucklePoint,
+                style = Stroke(width = 2.dp.toPx())
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 2.5.dp.toPx(),
+                center = knucklePoint
+            )
+        }
     }
 }
 
