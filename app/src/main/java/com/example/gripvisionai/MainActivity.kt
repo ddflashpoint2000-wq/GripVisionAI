@@ -65,7 +65,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -133,7 +132,7 @@ data class GripTarget(
 )
 
 val BEVEL_COLORS: Map<Int, Color> = mapOf(
-    1 to Color(0xFFFF5252), // Red
+    1 to Color(0xFFFF5252), // Red - Top Bevel 1
     2 to Color(0xFF00FF88), // Neon Green
     3 to Color(0xFF00E5FF), // Cyan
     4 to Color(0xFFFFD740), // Amber
@@ -231,17 +230,34 @@ fun getGripTarget(
 }
 
 /**
- * Computes the angle (in degrees, where -90 is top/12 o'clock) for bevel 1..8.
- * Right-handed goes clockwise (1..8 around the circle).
- * Left-handed goes anti-clockwise (1..8 around the circle).
+ * Returns the (x, y) position on the butt-cap silhouette for bevel 1..8,
+ * where Bevel 1 is always at the top (12 o'clock).
+ * Right-handed goes clockwise (1 -> 2 -> 3 ... -> 8).
+ * Left-handed goes anti-clockwise (1 -> 2 -> 3 ... -> 8).
  */
-fun bevelAngleDegrees(bevel: Int, isLeftHanded: Boolean): Double {
-    val clampedBevel = bevel.coerceIn(1, 8)
-    val step = (clampedBevel - 1) * 45.0
-    return if (isLeftHanded) {
-        -90.0 - step
-    } else {
-        -90.0 + step
+fun buttCapBevelPosition(
+    bevel: Int,
+    isLeftHanded: Boolean,
+    centerX: Float,
+    centerY: Float,
+    halfW: Float,
+    halfH: Float
+): Offset {
+    val b = bevel.coerceIn(1, 8)
+    val slot = if (!isLeftHanded) (b - 1) else ((8 - (b - 1)) % 8)
+
+    val cornerX = halfW * 0.72f
+    val cornerY = halfH * 0.72f
+
+    return when (slot) {
+        0 -> Offset(centerX, centerY - halfH)                 // Top (Bevel 1)
+        1 -> Offset(centerX + cornerX, centerY - cornerY)     // Top-right corner
+        2 -> Offset(centerX + halfW, centerY)                 // Right side
+        3 -> Offset(centerX + cornerX, centerY + cornerY)     // Bottom-right corner
+        4 -> Offset(centerX, centerY + halfH)                 // Bottom
+        5 -> Offset(centerX - cornerX, centerY + cornerY)     // Bottom-left corner
+        6 -> Offset(centerX - halfW, centerY)                 // Left side
+        else -> Offset(centerX - cornerX, centerY - cornerY)  // Top-left corner
     }
 }
 
@@ -257,13 +273,13 @@ data class HandTrackingState(
 )
 
 // ==========================================
-// 2. MEDIAPIPE HAND TRACKER (OCCLUSION-TUNED)
+// 2. MEDIAPIPE HAND TRACKER (SHARPENED)
 // ==========================================
 
 class GripHandTracker(
     context: Context,
-    private val smoothingAlpha: Float = 0.42f,
-    private val maxStepJump: Float = 0.28f,
+    private val baseAlpha: Float = 0.52f,
+    private val maxStepJump: Float = 0.16f,
     private val onHandUpdated: (HandTrackingState) -> Unit
 ) {
     var captureNextFrame: Boolean = false
@@ -272,7 +288,7 @@ class GripHandTracker(
     private var handLandmarker: HandLandmarker? = null
     private var smoothedLandmarks: List<SmoothedPoint>? = null
     private var lastValidTimestampMs: Long = 0L
-    private val dropoutGraceMs: Long = 350L
+    private val dropoutGraceMs: Long = 280L
 
     init {
         try {
@@ -284,9 +300,9 @@ class GripHandTracker(
                 .setBaseOptions(baseOptions)
                 .setRunningMode(RunningMode.IMAGE)
                 .setNumHands(1)
-                .setMinHandDetectionConfidence(0.24f)
-                .setMinHandPresenceConfidence(0.24f)
-                .setMinTrackingConfidence(0.24f)
+                .setMinHandDetectionConfidence(0.26f)
+                .setMinHandPresenceConfidence(0.26f)
+                .setMinTrackingConfidence(0.28f)
                 .build()
 
             handLandmarker = HandLandmarker.createFromOptions(context, options)
@@ -358,7 +374,6 @@ class GripHandTracker(
             return initial
         }
 
-        val alpha = smoothingAlpha.coerceIn(0.05f, 1.0f)
         val updated = raw.mapIndexed { idx, lm ->
             val p = prev[idx]
             val dx = lm.x() - p.x
@@ -375,6 +390,10 @@ class GripHandTracker(
             } else {
                 lm.y()
             }
+
+            // Adaptive alpha: dampens tiny jitter when nearly still, responds faster on clear movement
+            val speedFactor = (dist / 0.08f).coerceIn(0.45f, 1.35f)
+            val alpha = (baseAlpha * speedFactor).coerceIn(0.22f, 0.72f)
 
             SmoothedPoint(
                 x = alpha * clampedX + (1f - alpha) * p.x,
@@ -564,13 +583,13 @@ fun GripVisionApp() {
             )
         }
 
-        // Bottom-of-handle silhouette + bevel numbers 1-8 (clockwise righty, anti-clockwise lefty)
-        HandleBottomBevelOverlay(
+        // Butt-cap handle silhouette (top bevel = 1) + bevel numbers 1-8
+        ButtCapHandleOverlay(
             targetBevel = currentTarget.targetBevel,
             targetColor = currentTarget.bevelColor,
             isLeftHanded = isLeftHanded,
             isLocked = (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && lockScore == 100),
-            showBottomSilhouette = (currentStep == ScanStep.STEP_1_HANDLE_CAPTURE && snappedHandleBitmap == null),
+            showSilhouette = (currentStep == ScanStep.STEP_1_HANDLE_CAPTURE && snappedHandleBitmap == null),
             onTargetPointComputed = { targetCenterPx, screenSize ->
                 if (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && handState.landmarks.size >= 21) {
                     val knuckleLm = handState.landmarks[5] // Index base knuckle
@@ -583,9 +602,12 @@ fun GripVisionApp() {
                         (knucklePx.y - targetCenterPx.y).toDouble()
                     ).toFloat()
 
-                    val snapRadiusPx = screenSize.width * 0.12f
-                    val maxRadiusPx = screenSize.width * 0.35f
+                    val snapRadiusPx = screenSize.width * 0.11f
+                    val releaseRadiusPx = screenSize.width * 0.135f
+                    val maxRadiusPx = screenSize.width * 0.34f
+
                     lockScore = when {
+                        lockScore == 100 && distPx <= releaseRadiusPx -> 100
                         distPx <= snapRadiusPx -> 100
                         distPx >= maxRadiusPx -> 15
                         else -> {
@@ -599,12 +621,12 @@ fun GripVisionApp() {
             }
         )
 
-        // Base knuckle (landmark 5) spot only
+        // Sharpened base knuckle (landmark 5) spot only
         if (currentStep == ScanStep.STEP_2_HAND_PLACEMENT && handState.isHandVisible) {
             BaseKnuckleSpotOverlay(
                 landmarks = handState.landmarks,
                 knuckleColor = currentTarget.bevelColor,
-                isLocked = (lockScore == 100)
+                lockScore = lockScore
             )
         }
 
@@ -816,7 +838,7 @@ fun GripVisionApp() {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
                             text = if (snappedHandleBitmap == null) {
-                                "Place the bottom of your racket handle in the silhouette and tap TAKE PIC."
+                                "Line up your racket handle with top bevel 1 and tap TAKE PIC."
                             } else {
                                 "Pic taken! Go to hand placement and put your ${if (isLeftHanded) "left" else "right"} base knuckle on Bevel ${currentTarget.targetBevel}."
                             },
@@ -901,74 +923,61 @@ fun GripVisionApp() {
 }
 
 // ==========================================
-// 4. BOTTOM-OF-HANDLE SILHOUETTE + BEVELS 1-8
+// 4. BUTT-CAP HANDLE SILHOUETTE (TOP = 1)
 // ==========================================
 
 @Composable
-fun HandleBottomBevelOverlay(
+fun ButtCapHandleOverlay(
     targetBevel: Int,
     targetColor: Color,
     isLeftHanded: Boolean,
     isLocked: Boolean,
-    showBottomSilhouette: Boolean,
+    showSilhouette: Boolean,
     onTargetPointComputed: (Offset, Size) -> Unit
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
-        val centerX = if (isLeftHanded) w * 0.55f else w * 0.45f
+        val centerX = w * 0.50f
         val centerY = h * 0.50f
-        val tiltDegrees = if (isLeftHanded) -10f else 10f
 
-        val capWidth = w * 0.17f
-        val capHeight = h * 0.16f
-        val bevelRingRadius = w * 0.21f
+        val halfW = w * 0.24f
+        val halfH = h * 0.145f
+        val bevelCutX = halfW * 0.26f
+        val bevelCutY = halfH * 0.34f
 
-        val targetAngleRad = bevelAngleDegrees(targetBevel, isLeftHanded) * PI / 180.0
-        val targetPointPx = Offset(
-            x = centerX + (bevelRingRadius * cos(targetAngleRad)).toFloat(),
-            y = centerY + (bevelRingRadius * sin(targetAngleRad)).toFloat()
+        val targetPos = buttCapBevelPosition(
+            bevel = targetBevel,
+            isLeftHanded = isLeftHanded,
+            centerX = centerX,
+            centerY = centerY,
+            halfW = halfW,
+            halfH = halfH
         )
-        onTargetPointComputed(targetPointPx, size)
+        onTargetPointComputed(targetPos, size)
 
-        if (showBottomSilhouette) {
-            rotate(degrees = tiltDegrees, pivot = Offset(centerX, centerY)) {
-                val left = centerX - capWidth * 0.5f
-                val right = centerX + capWidth * 0.5f
-                val top = centerY - capHeight * 0.55f
-                val bottom = centerY + capHeight * 0.55f
-                val flare = capWidth * 0.16f
-
-                val bottomCapPath = Path().apply {
-                    moveTo(left, top)
-                    lineTo(right, top)
-                    lineTo(right + flare, bottom - 8.dp.toPx())
-                    quadraticBezierTo(
-                        right + flare,
-                        bottom,
-                        right - 6.dp.toPx(),
-                        bottom
-                    )
-                    lineTo(left + 6.dp.toPx(), bottom)
-                    quadraticBezierTo(
-                        left - flare,
-                        bottom,
-                        left - flare,
-                        bottom - 8.dp.toPx()
-                    )
-                    close()
-                }
-
-                drawPath(
-                    path = bottomCapPath,
-                    color = Color.White.copy(alpha = 0.28f),
-                    style = Stroke(
-                        width = 2.5.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 9f), 0f)
-                    )
-                )
+        if (showSilhouette) {
+            val capPath = Path().apply {
+                moveTo(centerX - halfW + bevelCutX, centerY - halfH)
+                lineTo(centerX + halfW - bevelCutX, centerY - halfH)
+                lineTo(centerX + halfW, centerY - halfH + bevelCutY)
+                lineTo(centerX + halfW, centerY + halfH - bevelCutY)
+                lineTo(centerX + halfW - bevelCutX, centerY + halfH)
+                lineTo(centerX - halfW + bevelCutX, centerY + halfH)
+                lineTo(centerX - halfW, centerY + halfH - bevelCutY)
+                lineTo(centerX - halfW, centerY - halfH + bevelCutY)
+                close()
             }
+
+            drawPath(
+                path = capPath,
+                color = Color.White.copy(alpha = 0.32f),
+                style = Stroke(
+                    width = 2.5.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 9f), 0f)
+                )
+            )
         }
 
         val textPaint = android.graphics.Paint().apply {
@@ -979,9 +988,14 @@ fun HandleBottomBevelOverlay(
         }
 
         for (bevel in 1..8) {
-            val angleRad = bevelAngleDegrees(bevel, isLeftHanded) * PI / 180.0
-            val bx = centerX + (bevelRingRadius * cos(angleRad)).toFloat()
-            val by = centerY + (bevelRingRadius * sin(angleRad)).toFloat()
+            val pos = buttCapBevelPosition(
+                bevel = bevel,
+                isLeftHanded = isLeftHanded,
+                centerX = centerX,
+                centerY = centerY,
+                halfW = halfW,
+                halfH = halfH
+            )
 
             val isTarget = (bevel == targetBevel)
             val color = BEVEL_COLORS.getValue(bevel)
@@ -990,27 +1004,27 @@ fun HandleBottomBevelOverlay(
                 drawCircle(
                     color = if (isLocked) Color(0x3800FF88) else targetColor.copy(alpha = 0.28f),
                     radius = 18.dp.toPx(),
-                    center = Offset(bx, by)
+                    center = pos
                 )
             }
 
             drawCircle(
                 color = if (isTarget) color else Color(0xCC10181C),
                 radius = if (isTarget) 12.dp.toPx() else 9.dp.toPx(),
-                center = Offset(bx, by)
+                center = pos
             )
             drawCircle(
                 color = color,
                 radius = if (isTarget) 12.dp.toPx() else 9.dp.toPx(),
-                center = Offset(bx, by),
+                center = pos,
                 style = Stroke(width = 1.5.dp.toPx())
             )
 
             textPaint.color = if (isTarget) android.graphics.Color.BLACK else android.graphics.Color.WHITE
             drawContext.canvas.nativeCanvas.drawText(
                 bevel.toString(),
-                bx,
-                by + 4.dp.toPx(),
+                pos.x,
+                pos.y + 4.dp.toPx(),
                 textPaint
             )
         }
@@ -1018,16 +1032,19 @@ fun HandleBottomBevelOverlay(
 }
 
 // ==========================================
-// 5. BASE KNUCKLE SPOT (INSIDE OR OUTSIDE HAND)
+// 5. SHARPENED BASE KNUCKLE SPOT
 // ==========================================
 
 @Composable
 fun BaseKnuckleSpotOverlay(
     landmarks: List<SmoothedPoint>,
     knuckleColor: Color,
-    isLocked: Boolean
+    lockScore: Int
 ) {
     if (landmarks.size < 21) return
+
+    val isLocked = lockScore == 100
+    val proximityRatio = (lockScore / 100f).coerceIn(0f, 1f)
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
@@ -1036,21 +1053,36 @@ fun BaseKnuckleSpotOverlay(
         val knucklePoint = Offset(landmarks[5].x * w, landmarks[5].y * h)
         val activeColor = if (isLocked) Color(0xFF00FF88) else knuckleColor
 
+        // Outer ring tightens onto the spot as proximity approaches 100%
+        val outerRingRadius = (26.dp - (8.dp * proximityRatio)).toPx()
         drawCircle(
-            color = activeColor.copy(alpha = 0.30f),
-            radius = 20.dp.toPx(),
+            color = activeColor.copy(alpha = if (isLocked) 0.35f else 0.22f),
+            radius = outerRingRadius,
             center = knucklePoint
         )
         drawCircle(
+            color = activeColor.copy(alpha = 0.85f),
+            radius = outerRingRadius,
+            center = knucklePoint,
+            style = Stroke(width = if (isLocked) 2.5.dp.toPx() else 1.5.dp.toPx())
+        )
+
+        // Crisp spot core
+        drawCircle(
             color = activeColor,
-            radius = 10.dp.toPx(),
+            radius = 9.5.dp.toPx(),
             center = knucklePoint
         )
         drawCircle(
             color = Color.White,
-            radius = 10.dp.toPx(),
+            radius = 9.5.dp.toPx(),
             center = knucklePoint,
             style = Stroke(width = 2.dp.toPx())
+        )
+        drawCircle(
+            color = Color.White,
+            radius = 2.5.dp.toPx(),
+            center = knucklePoint
         )
     }
 }
