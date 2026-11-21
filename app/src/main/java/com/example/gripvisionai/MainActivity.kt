@@ -24,6 +24,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -173,17 +174,17 @@ fun getGripTarget(
             )
             ShotPreset.BACKHAND_DINK -> when (backhandStyle) {
                 BackhandStyle.ONE_HANDED -> GripTarget(
-                    gripName = "Eastern Backhand (1H)",
+                    gripName = "1H Eastern Backhand",
                     targetBevel = 1,
                     bevelColor = BEVEL_COLORS.getValue(1),
-                    shortInstruction = "Place your index base knuckle on top Bevel 1.",
-                    fullGripInfo = "One-Handed Eastern Backhand (Bevel 1): Places your index base knuckle on top Bevel 1 to firm up the wrist for single-handed drives."
+                    shortInstruction = "Place your $anchorLabel index base knuckle on top Bevel 1.",
+                    fullGripInfo = "One-Handed Eastern Backhand ($playerSide): Places your $anchorLabel index base knuckle on top Bevel 1 to firm up the wrist for single-handed drives."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
-                    gripName = "Two-Handed Backhand (2H)",
+                    gripName = "2H Backhand",
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
-                    shortInstruction = "$playerSide: green spot = $anchorLabel base knuckle, cyan spot = $topHandLabel top knuckle.",
+                    shortInstruction = "$playerSide: green dot = $anchorLabel base knuckle, cyan dot = $topHandLabel top knuckle.",
                     fullGripInfo = "Two-Handed Backhand ($playerSide): Anchors your $anchorLabel index knuckle (green) near Bevel 2 while your $topHandLabel index knuckle (cyan) positions above for leverage and topspin."
                 )
             }
@@ -203,13 +204,22 @@ fun getGripTarget(
                 shortInstruction = "Keep your index base knuckle on Bevel 2.",
                 fullGripInfo = "Padel Continental Forehand (Bevel 2): Keeps the face neutral for low glass rebounds and controlled blocks."
             )
-            ShotPreset.BACKHAND_DINK -> GripTarget(
-                gripName = "Continental",
-                targetBevel = 2,
-                bevelColor = BEVEL_COLORS.getValue(2),
-                shortInstruction = "Keep your index base knuckle on Bevel 2.",
-                fullGripInfo = "Padel Continental Backhand (Bevel 2): Supports clean slice control off the glass and relaxed wrist action."
-            )
+            ShotPreset.BACKHAND_DINK -> when (backhandStyle) {
+                BackhandStyle.ONE_HANDED -> GripTarget(
+                    gripName = "1H Backhand",
+                    targetBevel = 2,
+                    bevelColor = BEVEL_COLORS.getValue(2),
+                    shortInstruction = "Keep your $anchorLabel index base knuckle on Bevel 2.",
+                    fullGripInfo = "One-Handed Padel Backhand ($playerSide): Supports clean slice control off the glass and relaxed wrist action."
+                )
+                BackhandStyle.TWO_HANDED -> GripTarget(
+                    gripName = "2H Backhand",
+                    targetBevel = 2,
+                    bevelColor = BEVEL_COLORS.getValue(2),
+                    shortInstruction = "$playerSide: green dot = $anchorLabel base knuckle, cyan dot = $topHandLabel top knuckle.",
+                    fullGripInfo = "Two-Handed Padel Backhand ($playerSide): Green spot marks your $anchorLabel anchor knuckle and cyan spot marks your $topHandLabel supporting knuckle."
+                )
+            }
         }
         GripSport.PICKLEBALL -> when (shot) {
             ShotPreset.SERVE_VOLLEY -> GripTarget(
@@ -226,13 +236,22 @@ fun getGripTarget(
                 shortInstruction = "Place your index base knuckle on side Bevel 3.",
                 fullGripInfo = "Pickleball Eastern Forehand (Bevel 3): Shake-hands grip for solid baseline drives and roll volleys."
             )
-            ShotPreset.BACKHAND_DINK -> GripTarget(
-                gripName = "Continental",
-                targetBevel = 2,
-                bevelColor = BEVEL_COLORS.getValue(2),
-                shortInstruction = "Place your index base knuckle on Bevel 2.",
-                fullGripInfo = "Pickleball Continental Dink (Bevel 2): Keeps the paddle face stable for soft, controlled dinks."
-            )
+            ShotPreset.BACKHAND_DINK -> when (backhandStyle) {
+                BackhandStyle.ONE_HANDED -> GripTarget(
+                    gripName = "1H Backhand",
+                    targetBevel = 2,
+                    bevelColor = BEVEL_COLORS.getValue(2),
+                    shortInstruction = "Place your $anchorLabel index base knuckle on Bevel 2.",
+                    fullGripInfo = "One-Handed Pickleball Backhand ($playerSide): Keeps the paddle face stable for soft, controlled dinks and blocks."
+                )
+                BackhandStyle.TWO_HANDED -> GripTarget(
+                    gripName = "2H Backhand",
+                    targetBevel = 2,
+                    bevelColor = BEVEL_COLORS.getValue(2),
+                    shortInstruction = "$playerSide: green dot = $anchorLabel base knuckle, cyan dot = $topHandLabel top knuckle.",
+                    fullGripInfo = "Two-Handed Pickleball Backhand ($playerSide): Green spot marks your $anchorLabel anchor knuckle and cyan spot marks your $topHandLabel top knuckle."
+                )
+            }
         }
     }
 }
@@ -313,9 +332,9 @@ class GripHandTracker(
                 .setBaseOptions(baseOptions)
                 .setRunningMode(RunningMode.IMAGE)
                 .setNumHands(2)
-                .setMinHandDetectionConfidence(0.26f)
-                .setMinHandPresenceConfidence(0.26f)
-                .setMinTrackingConfidence(0.28f)
+                .setMinHandDetectionConfidence(0.24f)
+                .setMinHandPresenceConfidence(0.24f)
+                .setMinTrackingConfidence(0.26f)
                 .build()
 
             handLandmarker = HandLandmarker.createFromOptions(context, options)
@@ -524,10 +543,8 @@ fun GripVisionApp() {
     var handState by remember { mutableStateOf(HandTrackingState()) }
     var lockScore by remember { mutableIntStateOf(0) }
 
-    val isTwoHandedBackhand =
-        selectedSport == GripSport.TENNIS &&
-            selectedShot == ShotPreset.BACKHAND_DINK &&
-            backhandStyle == BackhandStyle.TWO_HANDED
+    val isBackhandSelected = selectedShot == ShotPreset.BACKHAND_DINK
+    val isTwoHandedBackhand = isBackhandSelected && backhandStyle == BackhandStyle.TWO_HANDED
 
     val currentTarget = getGripTarget(selectedSport, selectedShot, backhandStyle, isLeftHanded)
 
@@ -789,28 +806,43 @@ fun GripVisionApp() {
                         )
                     )
                 }
+            }
 
-                if (selectedSport == GripSport.TENNIS && selectedShot == ShotPreset.BACKHAND_DINK) {
+            // Always-visible 1H / 2H selector bar whenever Backhand is selected
+            if (isBackhandSelected) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     BackhandStyle.entries.forEach { style ->
-                        FilterChip(
-                            selected = backhandStyle == style,
-                            onClick = { backhandStyle = style },
-                            label = {
-                                Text(
-                                    text = style.label,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1
+                        val selected = backhandStyle == style
+                        val labelText = if (style == BackhandStyle.ONE_HANDED) {
+                            "1H (1 Hand)"
+                        } else {
+                            "2H (2 Hands)"
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(30.dp)
+                                .background(
+                                    color = if (selected) Color(0xFFFFD740) else Color(0xCC121A1E),
+                                    shape = RoundedCornerShape(10.dp)
                                 )
-                            },
-                            modifier = Modifier.height(28.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = Color(0x99121A1E),
-                                labelColor = Color.White,
-                                selectedContainerColor = Color(0xFFFFD740),
-                                selectedLabelColor = Color.Black
+                                .clickable { backhandStyle = style },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = labelText,
+                                color = if (selected) Color.Black else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
                             )
-                        )
+                        }
                     }
                 }
             }
