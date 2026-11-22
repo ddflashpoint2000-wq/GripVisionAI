@@ -85,9 +85,7 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -543,6 +541,7 @@ fun GripVisionApp() {
     var selectedShot by remember { mutableStateOf(ShotPreset.SERVE_VOLLEY) }
     var backhandStyle by remember { mutableStateOf(BackhandStyle.ONE_HANDED) }
     var isLeftHanded by remember { mutableStateOf(false) }
+    var hasChosenHandedness by remember { mutableStateOf(false) }
 
     var snappedHandleBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var handState by remember { mutableStateOf(HandTrackingState()) }
@@ -571,7 +570,6 @@ fun GripVisionApp() {
         verifiedStreak = 0
     }
 
-    // In the Final Knuckle Check screen, hold a steady 100% alignment briefly and advance to Success
     LaunchedEffect(currentScreen, lockScore, handState.hands.size, isTwoHandedBackhand) {
         if (currentScreen == AppScreen.FINAL_KNUCKLE_CHECK) {
             val meetsRequirement = lockScore == 100 && (!isTwoHandedBackhand || handState.hands.size >= 2)
@@ -666,9 +664,17 @@ fun GripVisionApp() {
             AppScreen.HANDEDNESS_START -> {
                 HandednessStartOverlay(
                     isLeftHanded = isLeftHanded,
-                    onSelectLeftHanded = { isLeftHanded = true },
-                    onSelectRightHanded = { isLeftHanded = false },
-                    onContinue = {
+                    hasChosenHandedness = hasChosenHandedness,
+                    onSelectLeftHanded = {
+                        isLeftHanded = true
+                        hasChosenHandedness = true
+                        snappedHandleBitmap = null
+                        lockScore = 0
+                        currentScreen = AppScreen.HANDLE_CAPTURE
+                    },
+                    onSelectRightHanded = {
+                        isLeftHanded = false
+                        hasChosenHandedness = true
                         snappedHandleBitmap = null
                         lockScore = 0
                         currentScreen = AppScreen.HANDLE_CAPTURE
@@ -964,7 +970,6 @@ fun GripVisionApp() {
                     )
                 }
 
-                // Top verification banner
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -1089,6 +1094,7 @@ fun GripVisionApp() {
                         snappedHandleBitmap = null
                         lockScore = 0
                         verifiedStreak = 0
+                        hasChosenHandedness = false
                         currentScreen = AppScreen.HANDEDNESS_START
                     }
                 )
@@ -1158,9 +1164,9 @@ private fun selectAnchorHand(hands: List<TrackedHand>, isLeftHanded: Boolean): T
 @Composable
 fun HandednessStartOverlay(
     isLeftHanded: Boolean,
+    hasChosenHandedness: Boolean,
     onSelectLeftHanded: () -> Unit,
-    onSelectRightHanded: () -> Unit,
-    onContinue: () -> Unit
+    onSelectRightHanded: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -1191,16 +1197,7 @@ fun HandednessStartOverlay(
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Righty numbers bevels 1–8 clockwise • Lefty numbers 1–8 anti-clockwise",
-                color = Color.LightGray,
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1208,36 +1205,16 @@ fun HandednessStartOverlay(
             ) {
                 HandChoiceCard(
                     title = "LEFT HANDED",
-                    subtitle = "Anti-Clockwise (1–8)",
-                    selected = isLeftHanded,
+                    selected = hasChosenHandedness && isLeftHanded,
                     onClick = onSelectLeftHanded,
                     modifier = Modifier.weight(1f)
                 )
 
                 HandChoiceCard(
                     title = "RIGHT HANDED",
-                    subtitle = "Clockwise (1–8)",
-                    selected = !isLeftHanded,
+                    selected = hasChosenHandedness && !isLeftHanded,
                     onClick = onSelectRightHanded,
                     modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Button(
-                onClick = onContinue,
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF00FF88),
-                    contentColor = Color.Black
-                ),
-                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 12.dp)
-            ) {
-                Text(
-                    text = "CONTINUE TO HANDLE PIC →",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
                 )
             }
         }
@@ -1247,7 +1224,6 @@ fun HandednessStartOverlay(
 @Composable
 private fun HandChoiceCard(
     title: String,
-    subtitle: String,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -1256,27 +1232,20 @@ private fun HandChoiceCard(
         modifier = modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) Color(0xFF00FF88) else Color(0xCC121A1E)
+            containerColor = if (selected) Color(0xFF00FF88) else Color(0xFF101416)
         )
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(vertical = 24.dp, horizontal = 12.dp),
+            contentAlignment = Alignment.Center
         ) {
             Text(
                 text = title,
                 color = if (selected) Color.Black else Color.White,
                 fontWeight = FontWeight.Bold,
                 fontSize = 13.sp,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = subtitle,
-                color = if (selected) Color(0xFF102018) else Color.LightGray,
-                fontSize = 11.sp,
                 textAlign = TextAlign.Center
             )
         }
