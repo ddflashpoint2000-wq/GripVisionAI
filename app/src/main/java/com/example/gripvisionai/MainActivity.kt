@@ -1623,6 +1623,7 @@ private fun GripSelectionHud(
     }
 }
 
+@Composable
 private fun Modifier.horizontalScrollSafe(): Modifier {
     return this.then(
         Modifier.horizontalScroll(rememberScrollState())
