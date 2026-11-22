@@ -25,6 +25,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,12 +35,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -87,9 +88,9 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.hypot
-import androidx.compose.foundation.horizontalScroll
-
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -403,7 +404,8 @@ data class TrackedHand(
 
 data class HandTrackingState(
     val hands: List<TrackedHand> = emptyList(),
-    val isHandVisible: Boolean = false
+    val isHandVisible: Boolean = false,
+    val frameCounter: Long = 0L
 )
 
 data class KnuckleZone(
@@ -419,6 +421,50 @@ data class GripScore(
     val heelPad: Int = 0,
     val hasRequiredHands: Boolean = false
 )
+
+data class TargetAnchors(
+    val knuckleTarget: Offset,
+    val heelTarget: Offset
+)
+
+fun computeTargetAnchors(
+    target: GripTarget,
+    isLeftHanded: Boolean,
+    screenSize: Size
+): TargetAnchors {
+    val centreX = screenSize.width * 0.50f
+    val centreY = screenSize.height * 0.50f
+    val halfWidth = screenSize.width * 0.24f
+    val halfHeight = screenSize.height * 0.145f
+
+    val knuckleTarget = buttCapBevelPosition(
+        bevel = target.targetBevel,
+        isLeftHanded = isLeftHanded,
+        centerX = centreX,
+        centerY = centreY,
+        halfW = halfWidth,
+        halfH = halfHeight
+    )
+
+    val heelBevelEdge = buttCapBevelPosition(
+        bevel = target.heelPadBevel,
+        isLeftHanded = isLeftHanded,
+        centerX = centreX,
+        centerY = centreY,
+        halfW = halfWidth,
+        halfH = halfHeight
+    )
+
+    val heelTarget = Offset(
+        x = heelBevelEdge.x * 0.78f + centreX * 0.22f,
+        y = heelBevelEdge.y * 0.78f + centreY * 0.22f
+    )
+
+    return TargetAnchors(
+        knuckleTarget = knuckleTarget,
+        heelTarget = heelTarget
+    )
+}
 
 fun buttCapBevelPosition(
     bevel: Int,
@@ -450,16 +496,21 @@ fun buttCapBevelPosition(
         else -> Offset(centerX - cornerX, centerY - cornerY)
     }
 }
+
 class GripHandTracker(
     context: Context,
     private val onHandUpdated: (HandTrackingState) -> Unit
 ) {
-    var captureNextFrame = false
+    val captureNextFrame = AtomicBoolean(false)
+    val runHandDetection = AtomicBoolean(false)
+    val maximumHands = AtomicInteger(1)
+
     var onHandleSnapped: ((Bitmap) -> Unit)? = null
 
     private var handLandmarker: HandLandmarker? = null
     private var smoothedHands = mutableListOf<List<SmoothedPoint>>()
     private var lastValidTimestamp = 0L
+    private var frameCounter = 0L
 
     private val dropoutGraceMs = 250L
     private val smoothingAlpha = 0.48f
@@ -486,13 +537,11 @@ class GripHandTracker(
         }
     }
 
-    fun processFrame(
-        imageProxy: ImageProxy,
-        runHandDetection: Boolean,
-        maximumHands: Int
-    ) {
+    fun processFrame(imageProxy: ImageProxy) {
         try {
-            if (!captureNextFrame && !runHandDetection) return
+            val shouldCapture = captureNextFrame.getAndSet(false)
+            val shouldDetect = runHandDetection.get()
+            if (!shouldCapture && !shouldDetect) return
 
             val original = imageProxyToBitmap(imageProxy) ?: return
             val rotation = imageProxy.imageInfo.rotationDegrees.toFloat()
@@ -501,8 +550,7 @@ class GripHandTracker(
                 val matrix = Matrix().apply {
                     postRotate(rotation)
                 }
-
-                Bitmap.createBitmap(
+                val rotated = Bitmap.createBitmap(
                     original,
                     0,
                     0,
@@ -511,26 +559,40 @@ class GripHandTracker(
                     matrix,
                     true
                 )
+                if (rotated != original) {
+                    original.recycle()
+                }
+                rotated
             } else {
                 original
             }
 
-            if (captureNextFrame) {
-                captureNextFrame = false
+            if (shouldCapture) {
                 onHandleSnapped?.invoke(bitmap.copy(Bitmap.Config.ARGB_8888, false))
+                bitmap.recycle()
                 return
             }
 
-            if (!runHandDetection) return
+            if (!shouldDetect) {
+                bitmap.recycle()
+                return
+            }
 
-            val landmarker = handLandmarker ?: return
+            val landmarker = handLandmarker
+            if (landmarker == null) {
+                bitmap.recycle()
+                return
+            }
+
             val mediaPipeImage = BitmapImageBuilder(bitmap).build()
             val result = landmarker.detect(mediaPipeImage)
+            bitmap.recycle()
 
-            val requestedHands = maximumHands.coerceIn(1, 2)
+            val requestedHands = maximumHands.get().coerceIn(1, 2)
             val rawHands = result.landmarks().take(requestedHands)
             val handedness: List<List<Category>> = result.handednesses()
             val now = System.currentTimeMillis()
+            frameCounter++
 
             if (rawHands.isNotEmpty()) {
                 val newSmoothedHands = mutableListOf<List<SmoothedPoint>>()
@@ -565,7 +627,8 @@ class GripHandTracker(
                 onHandUpdated(
                     HandTrackingState(
                         hands = trackedHands,
-                        isHandVisible = true
+                        isHandVisible = true,
+                        frameCounter = frameCounter
                     )
                 )
             } else {
@@ -579,12 +642,19 @@ class GripHandTracker(
                             hands = smoothedHands
                                 .take(requestedHands)
                                 .map { TrackedHand(it, null) },
-                            isHandVisible = true
+                            isHandVisible = true,
+                            frameCounter = frameCounter
                         )
                     )
                 } else {
                     smoothedHands.clear()
-                    onHandUpdated(HandTrackingState())
+                    onHandUpdated(
+                        HandTrackingState(
+                            hands = emptyList(),
+                            isHandVisible = false,
+                            frameCounter = frameCounter
+                        )
+                    )
                 }
             }
         } catch (exception: Exception) {
@@ -664,17 +734,9 @@ class GripHandTracker(
         val width = image.width
         val height = image.height
 
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-
-        val yBuffer = yPlane.buffer
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-
-        yBuffer.rewind()
-        uBuffer.rewind()
-        vBuffer.rewind()
+        val yBuffer = image.planes[0].buffer.apply { rewind() }
+        val uBuffer = image.planes[1].buffer.apply { rewind() }
+        val vBuffer = image.planes[2].buffer.apply { rewind() }
 
         val ySize = yBuffer.remaining()
         val uSize = uBuffer.remaining()
@@ -728,7 +790,9 @@ private fun calculateKnuckleZone(
     screenSize: Size,
     isLeftHanded: Boolean
 ): KnuckleZone? {
-    if (hand.landmarks.size < 21) return null
+    if (hand.landmarks.size < 21 || screenSize.width <= 0f || screenSize.height <= 0f) {
+        return null
+    }
 
     fun point(index: Int): Offset {
         return Offset(
@@ -745,18 +809,12 @@ private fun calculateKnuckleZone(
 
     var acrossX = middleMcp.x - indexMcp.x
     var acrossY = middleMcp.y - indexMcp.y
-    var acrossLength = hypot(
-        acrossX.toDouble(),
-        acrossY.toDouble()
-    ).toFloat()
+    var acrossLength = hypot(acrossX.toDouble(), acrossY.toDouble()).toFloat()
 
     if (acrossLength < 1f) {
         acrossX = littleMcp.x - indexMcp.x
         acrossY = littleMcp.y - indexMcp.y
-        acrossLength = hypot(
-            acrossX.toDouble(),
-            acrossY.toDouble()
-        ).toFloat()
+        acrossLength = hypot(acrossX.toDouble(), acrossY.toDouble()).toFloat()
     }
 
     if (acrossLength < 1f) return null
@@ -836,12 +894,8 @@ private fun pointScore(
         distance <= lockRadius -> 100
         distance >= maximumRadius -> 0
         else -> {
-            val ratio = 1f -
-                ((distance - lockRadius) / (maximumRadius - lockRadius))
-
-            (ratio * 99f)
-                .toInt()
-                .coerceIn(0, 99)
+            val ratio = 1f - ((distance - lockRadius) / (maximumRadius - lockRadius))
+            (ratio * 99f).toInt().coerceIn(0, 99)
         }
     }
 }
@@ -855,6 +909,8 @@ private fun computeGripScore(
     screenSize: Size,
     previous: GripScore
 ): GripScore {
+    if (screenSize.width <= 0f || screenSize.height <= 0f) return GripScore()
+
     val anchorHand = selectAnchorHand(hands, isLeftHanded)
         ?: return GripScore()
 
@@ -878,27 +934,19 @@ private fun computeGripScore(
         previousScore = previous.heelPad
     )
 
-    val hasRequiredHands =
-        !isTwoHandedBackhand || hands.size >= 2
+    val hasRequiredHands = !isTwoHandedBackhand || hands.size >= 2
 
     /*
      * The base knuckle is weighted more heavily because it is the primary
      * visual teaching reference. The heel-pad point is an estimate.
      */
-    var overall = (
-        knuckleScore * 0.70f +
-            heelScore * 0.30f
-        ).toInt()
+    var overall = (knuckleScore * 0.70f + heelScore * 0.30f).toInt()
 
     if (!hasRequiredHands) {
         overall = overall.coerceAtMost(89)
     }
 
-    if (
-        hasRequiredHands &&
-        knuckleScore >= 94 &&
-        heelScore >= 86
-    ) {
+    if (hasRequiredHands && knuckleScore >= 94 && heelScore >= 86) {
         overall = 100
     }
 
@@ -909,6 +957,7 @@ private fun computeGripScore(
         hasRequiredHands = hasRequiredHands
     )
 }
+
 @Composable
 fun GripVisionApp() {
     val context = LocalContext.current
@@ -935,41 +984,16 @@ fun GripVisionApp() {
         }
     }
 
-    var currentScreen by remember {
-        mutableStateOf(AppScreen.HANDEDNESS)
-    }
-
-    var selectedSport by remember {
-        mutableStateOf(GripSport.TENNIS)
-    }
-
-    var selectedShot by remember {
-        mutableStateOf(ShotPreset.SERVE)
-    }
-
-    var backhandStyle by remember {
-        mutableStateOf(BackhandStyle.ONE_HANDED)
-    }
-
-    var isLeftHanded by remember {
-        mutableStateOf(false)
-    }
-
-    var capturedHandle by remember {
-        mutableStateOf<Bitmap?>(null)
-    }
-
-    var handState by remember {
-        mutableStateOf(HandTrackingState())
-    }
-
-    var gripScore by remember {
-        mutableStateOf(GripScore())
-    }
-
-    var verifiedFrames by remember {
-        mutableIntStateOf(0)
-    }
+    var currentScreen by remember { mutableStateOf(AppScreen.HANDEDNESS) }
+    var selectedSport by remember { mutableStateOf(GripSport.TENNIS) }
+    var selectedShot by remember { mutableStateOf(ShotPreset.SERVE) }
+    var backhandStyle by remember { mutableStateOf(BackhandStyle.ONE_HANDED) }
+    var isLeftHanded by remember { mutableStateOf(false) }
+    var capturedHandle by remember { mutableStateOf<Bitmap?>(null) }
+    var handState by remember { mutableStateOf(HandTrackingState()) }
+    var gripScore by remember { mutableStateOf(GripScore()) }
+    var verifiedFrames by remember { mutableIntStateOf(0) }
+    var overlaySize by remember { mutableStateOf(Size.Zero) }
 
     val currentTarget = getGripTarget(
         sport = selectedSport,
@@ -978,11 +1002,13 @@ fun GripVisionApp() {
         isLeftHanded = isLeftHanded
     )
 
-    val isBackhand = selectedShot == ShotPreset.BACKHAND
-
     val isTwoHandedBackhand =
-        isBackhand &&
-            backhandStyle == BackhandStyle.TWO_HANDED
+        selectedShot == ShotPreset.BACKHAND && backhandStyle == BackhandStyle.TWO_HANDED
+
+    val shouldRunHandDetection =
+        currentScreen == AppScreen.HAND_PLACEMENT || currentScreen == AppScreen.FINAL_CHECK
+
+    val desiredMaxHands = if (isTwoHandedBackhand) 2 else 1
 
     val tracker = remember {
         GripHandTracker(context) { state ->
@@ -990,8 +1016,14 @@ fun GripVisionApp() {
         }
     }
 
+    LaunchedEffect(shouldRunHandDetection, desiredMaxHands) {
+        tracker.runHandDetection.set(shouldRunHandDetection)
+        tracker.maximumHands.set(desiredMaxHands)
+    }
+
     LaunchedEffect(Unit) {
         tracker.onHandleSnapped = { bitmap ->
+            capturedHandle?.recycle()
             capturedHandle = bitmap
         }
     }
@@ -1009,17 +1041,35 @@ fun GripVisionApp() {
     }
 
     LaunchedEffect(
+        handState.frameCounter,
         currentScreen,
-        gripScore.overall,
-        gripScore.hasRequiredHands
+        overlaySize,
+        currentTarget,
+        isLeftHanded,
+        isTwoHandedBackhand
     ) {
-        if (currentScreen == AppScreen.FINAL_CHECK) {
-            if (
-                gripScore.overall == 100 &&
-                gripScore.hasRequiredHands
-            ) {
-                verifiedFrames++
+        if (!shouldRunHandDetection || overlaySize == Size.Zero) return@LaunchedEffect
 
+        val anchors = computeTargetAnchors(
+            target = currentTarget,
+            isLeftHanded = isLeftHanded,
+            screenSize = overlaySize
+        )
+
+        val updatedScore = computeGripScore(
+            hands = handState.hands,
+            isLeftHanded = isLeftHanded,
+            isTwoHandedBackhand = isTwoHandedBackhand,
+            knuckleTarget = anchors.knuckleTarget,
+            heelTarget = anchors.heelTarget,
+            screenSize = overlaySize,
+            previous = gripScore
+        )
+        gripScore = updatedScore
+
+        if (currentScreen == AppScreen.FINAL_CHECK) {
+            if (updatedScore.overall == 100 && updatedScore.hasRequiredHands) {
+                verifiedFrames++
                 if (verifiedFrames >= 5) {
                     currentScreen = AppScreen.SUCCESS
                 }
@@ -1029,30 +1079,22 @@ fun GripVisionApp() {
         }
     }
 
-    val cameraExecutor = remember {
-        Executors.newSingleThreadExecutor()
-    }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
 
     DisposableEffect(Unit) {
         onDispose {
             cameraExecutor.shutdown()
             tracker.close()
+            capturedHandle?.recycle()
         }
     }
-
-    val runHandDetection =
-        currentScreen == AppScreen.HAND_PLACEMENT ||
-            currentScreen == AppScreen.FINAL_CHECK
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        if (
-            hasCameraPermission &&
-            currentScreen != AppScreen.SUCCESS
-        ) {
+        if (hasCameraPermission && currentScreen != AppScreen.SUCCESS) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { androidContext ->
@@ -1060,8 +1102,7 @@ fun GripVisionApp() {
                         scaleType = PreviewView.ScaleType.FILL_CENTER
                     }
 
-                    val providerFuture =
-                        ProcessCameraProvider.getInstance(androidContext)
+                    val providerFuture = ProcessCameraProvider.getInstance(androidContext)
 
                     providerFuture.addListener(
                         {
@@ -1070,24 +1111,15 @@ fun GripVisionApp() {
                             val preview = Preview.Builder()
                                 .build()
                                 .also {
-                                    it.setSurfaceProvider(
-                                        previewView.surfaceProvider
-                                    )
+                                    it.setSurfaceProvider(previewView.surfaceProvider)
                                 }
 
                             val imageAnalysis = ImageAnalysis.Builder()
-                                .setBackpressureStrategy(
-                                    ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
-                                )
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                 .build()
                                 .also { analysis ->
                                     analysis.setAnalyzer(cameraExecutor) { proxy ->
-                                        tracker.processFrame(
-                                            imageProxy = proxy,
-                                            runHandDetection = runHandDetection,
-                                            maximumHands =
-                                                if (isTwoHandedBackhand) 2 else 1
-                                        )
+                                        tracker.processFrame(proxy)
                                     }
                                 }
 
@@ -1111,9 +1143,7 @@ fun GripVisionApp() {
         if (!hasCameraPermission) {
             CameraPermissionView(
                 onRequestPermission = {
-                    permissionLauncher.launch(
-                        Manifest.permission.CAMERA
-                    )
+                    permissionLauncher.launch(Manifest.permission.CAMERA)
                 }
             )
         } else {
@@ -1122,11 +1152,13 @@ fun GripVisionApp() {
                     HandednessScreen(
                         onLeftHanded = {
                             isLeftHanded = true
+                            capturedHandle?.recycle()
                             capturedHandle = null
                             currentScreen = AppScreen.HANDLE_CAPTURE
                         },
                         onRightHanded = {
                             isLeftHanded = false
+                            capturedHandle?.recycle()
                             capturedHandle = null
                             currentScreen = AppScreen.HANDLE_CAPTURE
                         }
@@ -1134,13 +1166,15 @@ fun GripVisionApp() {
                 }
 
                 AppScreen.HANDLE_CAPTURE -> {
-                    if (capturedHandle != null) {
-                        Image(
-                            bitmap = capturedHandle!!.asImageBitmap(),
-                            contentDescription = "Captured handle",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
+                    capturedHandle?.let { bitmap ->
+                        if (!bitmap.isRecycled) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "Captured handle",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
 
                     GripTargetOverlay(
@@ -1148,7 +1182,7 @@ fun GripVisionApp() {
                         isLeftHanded = isLeftHanded,
                         showHandleOutline = capturedHandle == null,
                         isLocked = false,
-                        onTargetsCalculated = { _, _, _ -> }
+                        onSizeChanged = { overlaySize = it }
                     )
 
                     GripSelectionHud(
@@ -1159,14 +1193,17 @@ fun GripVisionApp() {
                         currentTarget = currentTarget,
                         onSportSelected = {
                             selectedSport = it
+                            capturedHandle?.recycle()
                             capturedHandle = null
                         },
                         onShotSelected = {
                             selectedShot = it
+                            capturedHandle?.recycle()
                             capturedHandle = null
                         },
                         onBackhandStyleSelected = {
                             backhandStyle = it
+                            capturedHandle?.recycle()
                             capturedHandle = null
                         },
                         onChangeHandedness = {
@@ -1178,8 +1215,9 @@ fun GripVisionApp() {
                         hasCapture = capturedHandle != null,
                         onCapture = {
                             if (capturedHandle == null) {
-                                tracker.captureNextFrame = true
+                                tracker.captureNextFrame.set(true)
                             } else {
+                                capturedHandle?.recycle()
                                 capturedHandle = null
                             }
                         },
@@ -1198,30 +1236,14 @@ fun GripVisionApp() {
                         isLeftHanded = isLeftHanded,
                         showHandleOutline = true,
                         isLocked = gripScore.overall == 100,
-                        onTargetsCalculated = {
-                                knuckleTarget,
-                                heelTarget,
-                                screenSize ->
-
-                            gripScore = computeGripScore(
-                                hands = handState.hands,
-                                isLeftHanded = isLeftHanded,
-                                isTwoHandedBackhand =
-                                    isTwoHandedBackhand,
-                                knuckleTarget = knuckleTarget,
-                                heelTarget = heelTarget,
-                                screenSize = screenSize,
-                                previous = gripScore
-                            )
-                        }
+                        onSizeChanged = { overlaySize = it }
                     )
 
                     if (handState.isHandVisible) {
                         HandTrackingOverlay(
                             hands = handState.hands,
                             isLeftHanded = isLeftHanded,
-                            isTwoHandedBackhand =
-                                isTwoHandedBackhand,
+                            isTwoHandedBackhand = isTwoHandedBackhand,
                             gripScore = gripScore
                         )
                     }
@@ -1233,18 +1255,10 @@ fun GripVisionApp() {
                             backhandStyle = backhandStyle,
                             isLeftHanded = isLeftHanded,
                             currentTarget = currentTarget,
-                            onSportSelected = {
-                                selectedSport = it
-                            },
-                            onShotSelected = {
-                                selectedShot = it
-                            },
-                            onBackhandStyleSelected = {
-                                backhandStyle = it
-                            },
-                            onChangeHandedness = {
-                                currentScreen = AppScreen.HANDEDNESS
-                            }
+                            onSportSelected = { selectedSport = it },
+                            onShotSelected = { selectedShot = it },
+                            onBackhandStyleSelected = { backhandStyle = it },
+                            onChangeHandedness = { currentScreen = AppScreen.HANDEDNESS }
                         )
                     } else {
                         FinalCheckHeader(
@@ -1259,32 +1273,20 @@ fun GripVisionApp() {
                         handVisible = handState.isHandVisible,
                         target = currentTarget,
                         isTwoHanded = isTwoHandedBackhand,
-                        isFinalCheck =
-                            currentScreen == AppScreen.FINAL_CHECK,
+                        isFinalCheck = currentScreen == AppScreen.FINAL_CHECK,
                         onBack = {
-                            currentScreen =
-                                if (
-                                    currentScreen ==
-                                    AppScreen.FINAL_CHECK
-                                ) {
-                                    AppScreen.HAND_PLACEMENT
-                                } else {
-                                    AppScreen.HANDLE_CAPTURE
-                                }
+                            currentScreen = if (currentScreen == AppScreen.FINAL_CHECK) {
+                                AppScreen.HAND_PLACEMENT
+                            } else {
+                                AppScreen.HANDLE_CAPTURE
+                            }
                         },
                         onContinue = {
-                            if (
-                                currentScreen ==
-                                AppScreen.HAND_PLACEMENT
-                            ) {
+                            if (currentScreen == AppScreen.HAND_PLACEMENT) {
                                 tracker.resetSmoothing()
                                 verifiedFrames = 0
-                                currentScreen =
-                                    AppScreen.FINAL_CHECK
-                            } else if (
-                                gripScore.overall >= 90 &&
-                                gripScore.hasRequiredHands
-                            ) {
+                                currentScreen = AppScreen.FINAL_CHECK
+                            } else if (gripScore.overall >= 90 && gripScore.hasRequiredHands) {
                                 currentScreen = AppScreen.SUCCESS
                             }
                         }
@@ -1299,11 +1301,13 @@ fun GripVisionApp() {
                         backhandStyle = backhandStyle,
                         isLeftHanded = isLeftHanded,
                         onScanAgain = {
+                            capturedHandle?.recycle()
                             capturedHandle = null
                             gripScore = GripScore()
                             currentScreen = AppScreen.HANDLE_CAPTURE
                         },
                         onChangeHandedness = {
+                            capturedHandle?.recycle()
                             capturedHandle = null
                             gripScore = GripScore()
                             currentScreen = AppScreen.HANDEDNESS
@@ -1484,10 +1488,7 @@ private fun GripSelectionHud(
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp,
                 modifier = Modifier
-                    .background(
-                        Color(0xD910181C),
-                        RoundedCornerShape(12.dp)
-                    )
+                    .background(Color(0xD910181C), RoundedCornerShape(12.dp))
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             )
 
@@ -1496,8 +1497,7 @@ private fun GripSelectionHud(
                 onClick = onChangeHandedness,
                 label = {
                     Text(
-                        text =
-                            if (isLeftHanded) "LEFTY" else "RIGHTY",
+                        text = if (isLeftHanded) "LEFTY" else "RIGHTY",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -1515,20 +1515,12 @@ private fun GripSelectionHud(
             GripSport.entries.forEach { sport ->
                 FilterChip(
                     selected = selectedSport == sport,
-                    onClick = {
-                        onSportSelected(sport)
-                    },
-                    label = {
-                        Text(
-                            text = sport.label,
-                            fontSize = 10.sp
-                        )
-                    },
+                    onClick = { onSportSelected(sport) },
+                    label = { Text(text = sport.label, fontSize = 10.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         containerColor = Color(0xD9121A1E),
                         labelColor = Color.White,
-                        selectedContainerColor =
-                            DOMINANT_HAND_COLOR,
+                        selectedContainerColor = DOMINANT_HAND_COLOR,
                         selectedLabelColor = Color.Black
                     )
                 )
@@ -1538,26 +1530,18 @@ private fun GripSelectionHud(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScrollSafe(),
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             ShotPreset.entries.forEach { shot ->
                 FilterChip(
                     selected = selectedShot == shot,
-                    onClick = {
-                        onShotSelected(shot)
-                    },
-                    label = {
-                        Text(
-                            text = shot.label,
-                            fontSize = 10.sp
-                        )
-                    },
+                    onClick = { onShotSelected(shot) },
+                    label = { Text(text = shot.label, fontSize = 10.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         containerColor = Color(0xD9121A1E),
                         labelColor = Color.White,
-                        selectedContainerColor =
-                            SUPPORT_HAND_COLOR,
+                        selectedContainerColor = SUPPORT_HAND_COLOR,
                         selectedLabelColor = Color.Black
                     )
                 )
@@ -1577,27 +1561,15 @@ private fun GripSelectionHud(
                             .weight(1f)
                             .height(32.dp)
                             .background(
-                                color =
-                                    if (selected) {
-                                        Color(0xFFFFD740)
-                                    } else {
-                                        Color(0xD9121A1E)
-                                    },
+                                color = if (selected) Color(0xFFFFD740) else Color(0xD9121A1E),
                                 shape = RoundedCornerShape(10.dp)
                             )
-                            .clickable {
-                                onBackhandStyleSelected(style)
-                            },
+                            .clickable { onBackhandStyleSelected(style) },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = style.label,
-                            color =
-                                if (selected) {
-                                    Color.Black
-                                } else {
-                                    Color.White
-                                },
+                            color = if (selected) Color.Black else Color.White,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -1614,20 +1586,10 @@ private fun GripSelectionHud(
             fontWeight = FontWeight.Bold,
             fontSize = 11.sp,
             modifier = Modifier
-                .background(
-                    Color(0xD910181C),
-                    RoundedCornerShape(12.dp)
-                )
+                .background(Color(0xD910181C), RoundedCornerShape(12.dp))
                 .padding(horizontal = 10.dp, vertical = 5.dp)
         )
     }
-}
-
-@Composable
-private fun Modifier.horizontalScrollSafe(): Modifier {
-    return this.then(
-        Modifier.horizontalScroll(rememberScrollState())
-    )
 }
 
 @Composable
@@ -1638,12 +1600,12 @@ private fun CaptureControls(
 ) {
     Column(
         modifier = Modifier
-            .fillMaxWidth()
+            .fillMaxSize()
+            .navigationBarsPadding()
             .padding(12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Bottom
     ) {
-        Spacer(modifier = Modifier.weight(1f))
-
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -1655,8 +1617,7 @@ private fun CaptureControls(
                 )
             ) {
                 Text(
-                    text =
-                        if (hasCapture) "RETAKE" else "TAKE PICTURE",
+                    text = if (hasCapture) "RETAKE" else "TAKE PICTURE",
                     fontWeight = FontWeight.Bold,
                     fontSize = 11.sp
                 )
@@ -1682,119 +1643,56 @@ private fun CaptureControls(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text =
-                if (hasCapture) {
-                    "Picture saved. Place your hand naturally around the handle."
-                } else {
-                    "Place the racket butt cap inside the guide with Bevel 1 at the top."
-                },
+            text = if (hasCapture) {
+                "Picture saved. Place your hand naturally around the handle."
+            } else {
+                "Place the racket butt cap inside the guide with Bevel 1 at the top."
+            },
             color = Color.White,
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Color(0xDC111A1F),
-                    RoundedCornerShape(16.dp)
-                )
+                .background(Color(0xDC111A1F), RoundedCornerShape(16.dp))
                 .padding(12.dp)
         )
     }
 }
+
 @Composable
 private fun GripTargetOverlay(
     target: GripTarget,
     isLeftHanded: Boolean,
     showHandleOutline: Boolean,
     isLocked: Boolean,
-    onTargetsCalculated: (Offset, Offset, Size) -> Unit
+    onSizeChanged: (Size) -> Unit
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
+        onSizeChanged(size)
+
         val centreX = size.width * 0.50f
         val centreY = size.height * 0.50f
-
         val halfWidth = size.width * 0.24f
         val halfHeight = size.height * 0.145f
-
         val cutX = halfWidth * 0.26f
         val cutY = halfHeight * 0.34f
 
-        val knuckleTarget = buttCapBevelPosition(
-            bevel = target.targetBevel,
+        val anchors = computeTargetAnchors(
+            target = target,
             isLeftHanded = isLeftHanded,
-            centerX = centreX,
-            centerY = centreY,
-            halfW = halfWidth,
-            halfH = halfHeight
-        )
-
-        /*
-         * Offset the heel target slightly towards the centre of the handle.
-         * This prevents the heel and knuckle target markers from sitting
-         * directly on top of one another when they use the same bevel.
-         */
-        val heelBevelEdge = buttCapBevelPosition(
-            bevel = target.heelPadBevel,
-            isLeftHanded = isLeftHanded,
-            centerX = centreX,
-            centerY = centreY,
-            halfW = halfWidth,
-            halfH = halfHeight
-        )
-
-        val heelTarget = Offset(
-            x = heelBevelEdge.x * 0.78f + centreX * 0.22f,
-            y = heelBevelEdge.y * 0.78f + centreY * 0.22f
-        )
-
-        onTargetsCalculated(
-            knuckleTarget,
-            heelTarget,
-            size
+            screenSize = size
         )
 
         if (showHandleOutline) {
             val outline = Path().apply {
-                moveTo(
-                    centreX - halfWidth + cutX,
-                    centreY - halfHeight
-                )
-
-                lineTo(
-                    centreX + halfWidth - cutX,
-                    centreY - halfHeight
-                )
-
-                lineTo(
-                    centreX + halfWidth,
-                    centreY - halfHeight + cutY
-                )
-
-                lineTo(
-                    centreX + halfWidth,
-                    centreY + halfHeight - cutY
-                )
-
-                lineTo(
-                    centreX + halfWidth - cutX,
-                    centreY + halfHeight
-                )
-
-                lineTo(
-                    centreX - halfWidth + cutX,
-                    centreY + halfHeight
-                )
-
-                lineTo(
-                    centreX - halfWidth,
-                    centreY + halfHeight - cutY
-                )
-
-                lineTo(
-                    centreX - halfWidth,
-                    centreY - halfHeight + cutY
-                )
-
+                moveTo(centreX - halfWidth + cutX, centreY - halfHeight)
+                lineTo(centreX + halfWidth - cutX, centreY - halfHeight)
+                lineTo(centreX + halfWidth, centreY - halfHeight + cutY)
+                lineTo(centreX + halfWidth, centreY + halfHeight - cutY)
+                lineTo(centreX + halfWidth - cutX, centreY + halfHeight)
+                lineTo(centreX - halfWidth + cutX, centreY + halfHeight)
+                lineTo(centreX - halfWidth, centreY + halfHeight - cutY)
+                lineTo(centreX - halfWidth, centreY - halfHeight + cutY)
                 close()
             }
 
@@ -1833,44 +1731,34 @@ private fun GripTargetOverlay(
 
             if (selected) {
                 drawCircle(
-                    color =
-                        if (isLocked) {
-                            DOMINANT_HAND_COLOR.copy(alpha = 0.30f)
-                        } else {
-                            colour.copy(alpha = 0.26f)
-                        },
+                    color = if (isLocked) {
+                        DOMINANT_HAND_COLOR.copy(alpha = 0.30f)
+                    } else {
+                        colour.copy(alpha = 0.26f)
+                    },
                     radius = 21.dp.toPx(),
                     center = position
                 )
             }
 
             drawCircle(
-                color =
-                    if (selected) colour
-                    else Color(0xDD11191D),
-                radius =
-                    if (selected) 12.dp.toPx()
-                    else 9.dp.toPx(),
+                color = if (selected) colour else Color(0xDD11191D),
+                radius = if (selected) 12.dp.toPx() else 9.dp.toPx(),
                 center = position
             )
 
             drawCircle(
                 color = colour,
-                radius =
-                    if (selected) 12.dp.toPx()
-                    else 9.dp.toPx(),
+                radius = if (selected) 12.dp.toPx() else 9.dp.toPx(),
                 center = position,
-                style = Stroke(
-                    width = 1.5.dp.toPx()
-                )
+                style = Stroke(width = 1.5.dp.toPx())
             )
 
-            labelPaint.color =
-                if (selected) {
-                    android.graphics.Color.BLACK
-                } else {
-                    android.graphics.Color.WHITE
-                }
+            labelPaint.color = if (selected) {
+                android.graphics.Color.BLACK
+            } else {
+                android.graphics.Color.WHITE
+            }
 
             drawContext.canvas.nativeCanvas.drawText(
                 bevel.toString(),
@@ -1883,13 +1771,13 @@ private fun GripTargetOverlay(
         drawCircle(
             color = HEEL_PAD_COLOR.copy(alpha = 0.20f),
             radius = 17.dp.toPx(),
-            center = heelTarget
+            center = anchors.heelTarget
         )
 
         drawCircle(
             color = HEEL_PAD_COLOR,
             radius = 7.dp.toPx(),
-            center = heelTarget,
+            center = anchors.heelTarget,
             style = Stroke(width = 2.dp.toPx())
         )
     }
@@ -1918,12 +1806,11 @@ private fun HandTrackingOverlay(
             val isAnchor = hand === anchorHand
 
             if (isAnchor || !isTwoHandedBackhand) {
-                val centreColour =
-                    if (gripScore.overall == 100) {
-                        DOMINANT_HAND_COLOR
-                    } else {
-                        Color.White
-                    }
+                val centreColour = if (gripScore.overall == 100) {
+                    DOMINANT_HAND_COLOR
+                } else {
+                    Color.White
+                }
 
                 drawLine(
                     color = Color.White.copy(alpha = 0.72f),
@@ -2032,23 +1919,17 @@ private fun FinalCheckHeader(
         contentAlignment = Alignment.TopCenter
     ) {
         Text(
-            text =
-                if (isTwoHanded) {
-                    "FINAL CHECK • ${
-                        if (isLeftHanded) "LEFT" else "RIGHT"
-                    } ANCHOR + SUPPORT HAND"
-                } else {
-                    "FINAL CHECK • ${target.gripName.uppercase()}"
-                },
+            text = if (isTwoHanded) {
+                "FINAL CHECK • ${if (isLeftHanded) "LEFT" else "RIGHT"} ANCHOR + SUPPORT HAND"
+            } else {
+                "FINAL CHECK • ${target.gripName.uppercase()}"
+            },
             color = DOMINANT_HAND_COLOR,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
             modifier = Modifier
-                .background(
-                    Color(0xE6111A1F),
-                    RoundedCornerShape(14.dp)
-                )
+                .background(Color(0xE6111A1F), RoundedCornerShape(14.dp))
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         )
     }
@@ -2067,20 +1948,17 @@ private fun GripScorePanel(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .navigationBarsPadding()
             .padding(12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Bottom
     ) {
-        Spacer(modifier = Modifier.weight(1f))
-
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             OutlinedButton(
                 onClick = onBack,
-                contentPadding = PaddingValues(
-                    horizontal = 14.dp,
-                    vertical = 7.dp
-                )
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 7.dp)
             ) {
                 Text(
                     text = "← BACK",
@@ -2092,31 +1970,21 @@ private fun GripScorePanel(
 
             Button(
                 onClick = onContinue,
-                enabled =
-                    if (isFinalCheck) {
-                        score.overall >= 90 &&
-                            score.hasRequiredHands
-                    } else {
-                        handVisible
-                    },
+                enabled = if (isFinalCheck) {
+                    score.overall >= 90 && score.hasRequiredHands
+                } else {
+                    handVisible
+                },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = DOMINANT_HAND_COLOR,
                     contentColor = Color.Black,
                     disabledContainerColor = Color.DarkGray,
                     disabledContentColor = Color.LightGray
                 ),
-                contentPadding = PaddingValues(
-                    horizontal = 16.dp,
-                    vertical = 7.dp
-                )
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp)
             ) {
                 Text(
-                    text =
-                        if (isFinalCheck) {
-                            "CONFIRM GRIP →"
-                        } else {
-                            "FINAL CHECK →"
-                        },
+                    text = if (isFinalCheck) "CONFIRM GRIP →" else "FINAL CHECK →",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -2128,9 +1996,7 @@ private fun GripScorePanel(
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xE8131D22)
-            )
+            colors = CardDefaults.cardColors(containerColor = Color(0xE8131D22))
         ) {
             Row(
                 modifier = Modifier.padding(12.dp),
@@ -2139,39 +2005,24 @@ private fun GripScorePanel(
             ) {
                 GripMatchGauge(
                     score = score.overall,
-                    ringColour =
-                        if (score.overall == 100) {
-                            DOMINANT_HAND_COLOR
-                        } else {
-                            target.bevelColor
-                        }
+                    ringColour = if (score.overall == 100) {
+                        DOMINANT_HAND_COLOR
+                    } else {
+                        target.bevelColor
+                    }
                 )
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = when {
-                            !handVisible ->
-                                "Bring your hand into the camera"
-
-                            isTwoHanded &&
-                                !score.hasRequiredHands ->
-                                "Add your supporting hand"
-
-                            score.overall == 100 ->
-                                "Grip position verified"
-
+                            !handVisible -> "Bring your hand into the camera"
+                            isTwoHanded && !score.hasRequiredHands -> "Add your supporting hand"
+                            score.overall == 100 -> "Grip position verified"
                             score.knuckle < score.heelPad ->
                                 "Move the base knuckle towards Bevel ${target.targetBevel}"
-
-                            else ->
-                                "Adjust the heel pad towards the purple target"
+                            else -> "Adjust the heel pad towards the purple target"
                         },
-                        color =
-                            if (score.overall == 100) {
-                                DOMINANT_HAND_COLOR
-                            } else {
-                                Color.White
-                            },
+                        color = if (score.overall == 100) DOMINANT_HAND_COLOR else Color.White,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -2214,8 +2065,7 @@ private fun GripMatchGauge(
     ringColour: Color
 ) {
     val animatedSweep by animateFloatAsState(
-        targetValue =
-            score.coerceIn(0, 100) / 100f * 360f,
+        targetValue = score.coerceIn(0, 100) / 100f * 360f,
         label = "gripScore"
     )
 
@@ -2268,6 +2118,7 @@ private fun SuccessView(
             .fillMaxSize()
             .background(Color(0xFF0B1114))
             .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(20.dp)
     ) {
         Column(
@@ -2306,13 +2157,7 @@ private fun SuccessView(
                     }
 
                     append(" • ")
-                    append(
-                        if (isLeftHanded) {
-                            "Left-handed"
-                        } else {
-                            "Right-handed"
-                        }
-                    )
+                    append(if (isLeftHanded) "Left-handed" else "Right-handed")
                 },
                 color = Color.LightGray,
                 fontSize = 12.sp,
@@ -2324,9 +2169,7 @@ private fun SuccessView(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF142027)
-                )
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF142027))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
