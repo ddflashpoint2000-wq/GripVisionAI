@@ -18,6 +18,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -32,6 +33,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -65,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -75,6 +78,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +96,7 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -147,6 +152,7 @@ enum class BackhandStyle(val label: String) {
 }
 
 enum class AppFlowStep {
+    LOAD_UP,
     HAND_SELECTION,
     SPORT_SELECTION,
     STROKE_SELECTION,
@@ -208,6 +214,56 @@ val BEVEL_COLORS: Map<Int, Color> = mapOf(
 
 val DOMINANT_HAND_COLOR = Color(0xFF00FF88)
 val SUPPORT_HAND_COLOR = Color(0xFF00E5FF)
+
+// Replace these resource IDs if you name your drawable files differently in res/drawable/
+object AppBackgrounds {
+    @DrawableRes val LoadUpStadium = R.drawable.bg_futuristic_stadium
+    @DrawableRes val TennisCourt = R.drawable.bg_court_tennis
+    @DrawableRes val PadelCourt = R.drawable.bg_court_padel
+    @DrawableRes val PickleballCourt = R.drawable.bg_court_pickleball
+
+    @DrawableRes
+    fun forSport(sport: GripSport): Int = when (sport) {
+        GripSport.TENNIS -> TennisCourt
+        GripSport.PADEL -> PadelCourt
+        GripSport.PICKLEBALL -> PickleballCourt
+    }
+}
+
+@Composable
+fun FuturisticCourtBackdrop(
+    @DrawableRes imageRes: Int,
+    scrimAlpha: Float = 0.62f,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFF070B0E))
+    ) {
+        Image(
+            painter = painterResource(id = imageRes),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF070B0E).copy(alpha = (scrimAlpha + 0.10f).coerceAtMost(0.92f)),
+                            Color(0xFF070B0E).copy(alpha = scrimAlpha),
+                            Color(0xFF070B0E).copy(alpha = (scrimAlpha + 0.14f).coerceAtMost(0.94f))
+                        )
+                    )
+                )
+        )
+        content()
+    }
+}
 
 fun getStrokesFor(sport: GripSport): List<StrokeType> {
     return when (sport) {
@@ -319,7 +375,7 @@ fun getGripTarget(
                     targetBevel = 1,
                     bevelColor = BEVEL_COLORS.getValue(1),
                     shortInstruction = "Place your $anchorLabel index base knuckle on top Bevel 1.",
-                    fullGripInfo = "Tennis 1H Eastern Backhand ($playerSide, Bevel 1) for$shotName: Firms up the wrist behind the ball."
+                    fullGripInfo = "Tennis 1H Eastern Backhand ($playerSide, Bevel 1) for $shotName: Firms up the wrist behind the ball."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -327,7 +383,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Tennis 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel hand on Continental (Bevel 2) + top$topHandLabel hand on Bevel 7/6."
+                    fullGripInfo = "Tennis 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel hand on Continental (Bevel 2) + top $topHandLabel hand on Bevel 7/6."
                 )
             }
         }
@@ -377,7 +433,7 @@ fun getGripTarget(
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "Keep your $anchorLabel index base knuckle on Bevel 2.",
-                    fullGripInfo = "Padel 1H Backhand ($playerSide, Bevel 2) for$shotName: Relaxed wrist for wall exits and volleys."
+                    fullGripInfo = "Padel 1H Backhand ($playerSide, Bevel 2) for $shotName: Relaxed wrist for wall exits and volleys."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -385,7 +441,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Padel 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel knuckle on Bevel 2 and top$topHandLabel knuckle on Bevel 7."
+                    fullGripInfo = "Padel 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel knuckle on Bevel 2 and top $topHandLabel knuckle on Bevel 7."
                 )
             }
         }
@@ -424,7 +480,7 @@ fun getGripTarget(
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "Place your $anchorLabel index base knuckle on Bevel 2.",
-                    fullGripInfo = "Pickleball 1H Backhand ($playerSide, Bevel 2) for$shotName: Steady control for dinks, blocks, and resets."
+                    fullGripInfo = "Pickleball 1H Backhand ($playerSide, Bevel 2) for $shotName: Steady control for dinks, blocks, and resets."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -432,7 +488,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Pickleball 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel knuckle on Bevel 2 and top$topHandLabel knuckle on Bevel 7."
+                    fullGripInfo = "Pickleball 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel knuckle on Bevel 2 and top $topHandLabel knuckle on Bevel 7."
                 )
             }
         }
@@ -675,7 +731,6 @@ class GripHandTracker(
                 .setModelAssetPath("hand_landmarker.task")
                 .build()
 
-            // Honest offline thresholds so we don't hallucinate fake landmarks
             val options = HandLandmarker.HandLandmarkerOptions.builder()
                 .setBaseOptions(baseOptions)
                 .setRunningMode(RunningMode.IMAGE)
@@ -1035,8 +1090,64 @@ class GripHandTracker(
 }
 
 // ==========================================
-// 4. HAND, SPORT, STROKE, SHOT & PREVIEW SCREENS
+// 4. LOAD-UP, HAND, SPORT, STROKE, SHOT & PREVIEW SCREENS
 // ==========================================
+
+@Composable
+fun LoadUpScreen(
+    onContinue: () -> Unit
+) {
+    LaunchedEffect(Unit) {
+        delay(1800L)
+        onContinue()
+    }
+
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.LoadUpStadium,
+        scrimAlpha = 0.56f
+    ) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "GripVision AI",
+                color = Color(0xFF00FF88),
+                fontSize = 36.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Tennis • Padel • Pickleball Grip Telemetry",
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            CircularProgressIndicator(
+                color = Color(0xFF00FF88),
+                strokeWidth = 3.dp,
+                modifier = Modifier.size(30.dp)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            OutlinedButton(
+                onClick = onContinue,
+                shape = CircleShape,
+                border = BorderStroke(1.dp, Color(0xFF00FF88).copy(alpha = 0.6f))
+            ) {
+                Text(
+                    text = "START →",
+                    color = Color(0xFF00FF88),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun AiModeToggleRow(
@@ -1055,7 +1166,7 @@ fun AiModeToggleRow(
                     .weight(1f)
                     .height(38.dp)
                     .background(
-                        color = if (selected) Color(0xFF00E5FF) else Color(0xFF121A1E),
+                        color = if (selected) Color(0xFF00E5FF) else Color(0xCC121A1E),
                         shape = RoundedCornerShape(12.dp)
                     )
                     .clickable { onSelectAiMode(mode) },
@@ -1078,70 +1189,74 @@ fun DominantHandSelectionScreen(
     onSelectAiMode: (AiAnalysisMode) -> Unit,
     onSelectHand: (isLeftHanded: Boolean) -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0F12))
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 28.dp),
-        contentAlignment = Alignment.Center
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.TennisCourt,
+        scrimAlpha = 0.65f
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 28.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "GripVision AI",
-                color = Color(0xFF00FF88),
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = "Select Your Dominant Hand",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(30.dp))
-
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                HandChoiceCard(
-                    title = "LEFT\nHANDED",
-                    onClick = { onSelectHand(true) },
-                    modifier = Modifier.weight(1f)
+                Text(
+                    text = "GripVision AI",
+                    color = Color(0xFF00FF88),
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Bold
                 )
 
-                HandChoiceCard(
-                    title = "RIGHT\nHANDED",
-                    onClick = { onSelectHand(false) },
-                    modifier = Modifier.weight(1f)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Select Your Dominant Hand",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(30.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    HandChoiceCard(
+                        title = "LEFT\nHANDED",
+                        onClick = { onSelectHand(true) },
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    HandChoiceCard(
+                        title = "RIGHT\nHANDED",
+                        onClick = { onSelectHand(false) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                Text(
+                    text = "AI Analysis Mode",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                AiModeToggleRow(
+                    aiMode = aiMode,
+                    onSelectAiMode = onSelectAiMode
                 )
             }
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            Text(
-                text = "AI Analysis Mode",
-                color = Color.LightGray,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            AiModeToggleRow(
-                aiMode = aiMode,
-                onSelectAiMode = onSelectAiMode
-            )
         }
     }
 }
@@ -1157,7 +1272,7 @@ private fun HandChoiceCard(
             .height(180.dp)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Black),
+        colors = CardDefaults.cardColors(containerColor = Color(0xDF0A0F12)),
         border = BorderStroke(1.5.dp, Color(0xFF28333A))
     ) {
         Box(
@@ -1186,86 +1301,90 @@ fun SportSelectionMenuScreen(
 ) {
     val handText = if (isLeftHanded) "Left-Handed" else "Right-Handed"
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0F12))
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 24.dp),
-        contentAlignment = Alignment.Center
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.TennisCourt,
+        scrimAlpha = 0.65f
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 24.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "GripVision AI",
-                color = Color(0xFF00FF88),
-                fontSize = 30.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = "$handText • Select Sport",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            GripSport.entries.forEach { sport ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 7.dp)
-                        .clickable { onSelectSport(sport) },
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Black),
-                    border = BorderStroke(1.2.dp, Color(0xFF1E2930))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 18.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = sport.label,
-                            color = Color.White,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = sport.subtitle,
-                            color = Color(0xFF00FF88),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.End
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(22.dp))
-
-            Button(
-                onClick = onBackToHand,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF172026)),
-                shape = CircleShape,
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    text = "← Main Menu",
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "GripVision AI",
+                    color = Color(0xFF00FF88),
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.ExtraBold
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "$handText • Select Sport",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                GripSport.entries.forEach { sport ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 7.dp)
+                            .clickable { onSelectSport(sport) },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xDF0A0F12)),
+                        border = BorderStroke(1.2.dp, Color(0xFF25323A))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 18.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = sport.label,
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = sport.subtitle,
+                                color = Color(0xFF00FF88),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.End
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(22.dp))
+
+                Button(
+                    onClick = onBackToHand,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xDD172026)),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = "← Main Menu",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }
@@ -1283,109 +1402,112 @@ fun StrokeSelectionScreen(
 ) {
     val strokes = remember(sport) { getStrokesFor(sport) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0F12))
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.forSport(sport),
+        scrimAlpha = 0.66f
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                OutlinedButton(onClick = onBackToSport, shape = CircleShape) {
-                    Text("← Sport", color = Color.White, fontSize = 12.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    OutlinedButton(onClick = onBackToSport, shape = CircleShape) {
+                        Text("← Sport", color = Color.White, fontSize = 12.sp)
+                    }
+                    OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
+                        Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
+                    }
                 }
-                OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
-                    Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = sport.label,
+                    color = Color(0xFF00FF88),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "${if (isLeftHanded) "Left-Handed" else "Right-Handed"} • Select Stroke",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                strokes.forEach { stroke ->
+                    val extraLabel = if (stroke == StrokeType.BACKHAND) " (${backhandStyle.label})" else ""
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 5.dp)
+                            .clickable { onSelectStroke(stroke) },
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xDF0A0F12)),
+                        border = BorderStroke(1.2.dp, Color(0xFF25323A))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${stroke.label.uppercase()}$extraLabel",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                            Text(
+                                text = "Shots →",
+                                color = Color(0xFF00E5FF),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
-
-            Text(
-                text = sport.label,
-                color = Color(0xFF00FF88),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-            Text(
-                text = "${if (isLeftHanded) "Left-Handed" else "Right-Handed"} • Select Stroke",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            strokes.forEach { stroke ->
-                val extraLabel = if (stroke == StrokeType.BACKHAND) " (${backhandStyle.label})" else ""
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 5.dp)
-                        .clickable { onSelectStroke(stroke) },
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.Black),
-                    border = BorderStroke(1.2.dp, Color(0xFF1E2930))
-                ) {
-                    Row(
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                BackhandStyle.entries.forEach { style ->
+                    val selected = backhandStyle == style
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .weight(1f)
+                            .height(42.dp)
+                            .background(
+                                color = if (selected) Color(0xFFFFD740) else Color(0xCC121A1E),
+                                shape = RoundedCornerShape(14.dp)
+                            )
+                            .clickable { onSelectBackhandStyle(style) },
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "${stroke.label.uppercase()}$extraLabel",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = "Shots →",
-                            color = Color(0xFF00E5FF),
+                            text = if (style == BackhandStyle.ONE_HANDED) "Backhand: 1H" else "Backhand: 2H",
+                            color = if (selected) Color.Black else Color.White,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
-                }
-            }
-        }
-
-        // Moved Backhand 1H / 2H selector to the bottom of the page
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            BackhandStyle.entries.forEach { style ->
-                val selected = backhandStyle == style
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(42.dp)
-                        .background(
-                            color = if (selected) Color(0xFFFFD740) else Color(0xFF121A1E),
-                            shape = RoundedCornerShape(14.dp)
-                        )
-                        .clickable { onSelectBackhandStyle(style) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (style == BackhandStyle.ONE_HANDED) "Backhand: 1H" else "Backhand: 2H",
-                        color = if (selected) Color.Black else Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
                 }
             }
         }
@@ -1403,74 +1525,78 @@ fun ShotSelectionScreen(
 ) {
     val shots = remember(sport, stroke) { getShotsFor(sport, stroke) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0F12))
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.forSport(sport),
+        scrimAlpha = 0.66f
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            OutlinedButton(onClick = onBackToStroke, shape = CircleShape) {
-                Text("← Stroke", color = Color.White, fontSize = 12.sp)
-            }
-            OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
-                Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = "${sport.label} • ${stroke.label}",
-            color = Color(0xFF00FF88),
-            fontSize = 23.sp,
-            fontWeight = FontWeight.ExtraBold,
-            textAlign = TextAlign.Center
-        )
-        Text(
-            text = "${if (isLeftHanded) "Left-Handed" else "Right-Handed"} • Select Shot",
-            color = Color.White,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        shots.forEach { shot ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 5.dp)
-                    .clickable { onSelectShot(shot) },
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Black),
-                border = BorderStroke(1.2.dp, Color(0xFF1E2930))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
+                OutlinedButton(onClick = onBackToStroke, shape = CircleShape) {
+                    Text("← Stroke", color = Color.White, fontSize = 12.sp)
+                }
+                OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
+                    Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "${sport.label} • ${stroke.label}",
+                color = Color(0xFF00FF88),
+                fontSize = 23.sp,
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = "${if (isLeftHanded) "Left-Handed" else "Right-Handed"} • Select Shot",
+                color = Color.White,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            shots.forEach { shot ->
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 15.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(vertical = 5.dp)
+                        .clickable { onSelectShot(shot) },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xDF0A0F12)),
+                    border = BorderStroke(1.2.dp, Color(0xFF25323A))
                 ) {
-                    Text(
-                        text = shot.uppercase(),
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                    Text(
-                        text = "Grip →",
-                        color = Color(0xFF00FF88),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 15.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = shot.uppercase(),
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "Grip →",
+                            color = Color(0xFF00FF88),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
@@ -1495,110 +1621,114 @@ fun GripPreviewScreen(
         "Bevel ${target.targetBevel}"
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0F12))
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.forSport(sport),
+        scrimAlpha = 0.68f
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            OutlinedButton(onClick = onBackToShot, shape = CircleShape) {
-                Text("← Shot", color = Color.White, fontSize = 12.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                OutlinedButton(onClick = onBackToShot, shape = CircleShape) {
+                    Text("← Shot", color = Color.White, fontSize = 12.sp)
+                }
+                OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
+                    Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
+                }
             }
-            OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
-                Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
-            }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        Text(
-            text = "${sport.label} • ${stroke.label} • $shotName",
-            color = Color.LightGray,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        Text(
-            text = target.gripName,
-            color = target.bevelColor,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.ExtraBold,
-            textAlign = TextAlign.Center
-        )
-
-        Text(
-            text = bevelSummary,
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.Black),
-            border = BorderStroke(1.2.dp, Color(0xFF1E2930))
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = target.shortInstruction,
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = target.fullGripInfo,
-                    color = Color.LightGray,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = "1. Take pic of handle just as it is (Bevel 1 at top)\n2. Take pic with handle in hand as-is\n3. Take one last pic and AI checks your grip",
-                    color = Color(0xFF00E5FF),
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        AiModeToggleRow(
-            aiMode = aiMode,
-            onSelectAiMode = onSelectAiMode
-        )
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        Button(
-            onClick = onStartCapture,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF00FF88),
-                contentColor = Color.Black
-            ),
-            shape = CircleShape,
-            contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
-        ) {
             Text(
-                text = "START 3-PIC GRIP CHECK →",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.ExtraBold
+                text = "${sport.label} • ${stroke.label} • $shotName",
+                color = Color.LightGray,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
             )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = target.gripName,
+                color = target.bevelColor,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center
+            )
+
+            Text(
+                text = bevelSummary,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xE60A0F12)),
+                border = BorderStroke(1.2.dp, Color(0xFF25323A))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = target.shortInstruction,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = target.fullGripInfo,
+                        color = Color.LightGray,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "1. Take pic of handle just as it is (Bevel 1 at top)\n2. Take pic with handle in hand as-is\n3. Take one last pic and AI checks your grip",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            AiModeToggleRow(
+                aiMode = aiMode,
+                onSelectAiMode = onSelectAiMode
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Button(
+                onClick = onStartCapture,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF00FF88),
+                    contentColor = Color.Black
+                ),
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
+            ) {
+                Text(
+                    text = "START 3-PIC GRIP CHECK →",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+            }
         }
     }
 }
@@ -1609,7 +1739,7 @@ fun GripPreviewScreen(
 
 @Composable
 fun GripVisionApp() {
-    var flowStep by remember { mutableStateOf(AppFlowStep.HAND_SELECTION) }
+    var flowStep by remember { mutableStateOf(AppFlowStep.LOAD_UP) }
     var aiMode by remember { mutableStateOf(AiAnalysisMode.ONLINE_GEMINI) }
     var isLeftHanded by remember { mutableStateOf(false) }
     var selectedSport by remember { mutableStateOf(GripSport.PADEL) }
@@ -1640,6 +1770,12 @@ fun GripVisionApp() {
     }
 
     when (flowStep) {
+        AppFlowStep.LOAD_UP -> {
+            LoadUpScreen(
+                onContinue = { flowStep = AppFlowStep.HAND_SELECTION }
+            )
+        }
+
         AppFlowStep.HAND_SELECTION -> {
             DominantHandSelectionScreen(
                 aiMode = aiMode,
@@ -1939,7 +2075,6 @@ private fun ThreePictureCaptureScreen(
             )
         }
 
-        // Top Bar with Online / Offline Switch
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1980,7 +2115,6 @@ private fun ThreePictureCaptureScreen(
             }
         }
 
-        // Live Knuckle Status Pill in Pic 2 & Pic 3
         if (captureStage != CaptureStage.HANDLE_PICTURE) {
             val pair = resolveHandPair(handState.hands, isLeftHanded)
             val anchorBevel = pair.anchorHand?.landmarks?.getOrNull(5)?.let {
@@ -2016,7 +2150,6 @@ private fun ThreePictureCaptureScreen(
             }
         }
 
-        // Bottom Capture Controls
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -2276,151 +2409,155 @@ fun AiGripResultScreen(
     onNewShot: () -> Unit,
     onMainMenu: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0F12))
-            .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.forSport(sport),
+        scrimAlpha = 0.72f
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${sport.label} • ${stroke.label} • $shotName",
-                color = Color.LightGray,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
-                Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
-            }
-        }
-
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            if (finalGripBitmap != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(210.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                ) {
-                    Image(
-                        bitmap = finalGripBitmap.asImageBitmap(),
-                        contentDescription = "Final Grip Photo",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    ButtCapHandleOverlay(
-                        targetBevel = target.targetBevel,
-                        supportTargetBevel = target.supportTargetBevel,
-                        targetColor = target.bevelColor,
-                        isLeftHanded = isLeftHanded,
-                        showSilhouette = false
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            GripMatchGauge(
-                score = result.score,
-                ringColor = when {
-                    result.score >= 90 -> Color(0xFF00FF88)
-                    result.score >= 70 -> Color(0xFFFFD740)
-                    else -> Color(0xFFFF5252)
-                }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = result.sourceEngine,
-                color = Color(0xFF00E5FF),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = result.headline,
-                color = when {
-                    result.score >= 90 -> Color(0xFF00FF88)
-                    result.score >= 70 -> Color(0xFFFFD740)
-                    else -> Color(0xFFFF5252)
-                },
-                fontSize = 19.sp,
-                fontWeight = FontWeight.ExtraBold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Text(
-                text = "Detected: ${result.detectedGripLabel}",
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Card(
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Black),
-                border = BorderStroke(1.2.dp, Color(0xFF1E2930))
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = result.detail,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = target.fullGripInfo,
-                        color = Color.LightGray,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp
-                    )
+                Text(
+                    text = "${sport.label} • ${stroke.label} • $shotName",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
+                    Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
                 }
             }
-        }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            OutlinedButton(
-                onClick = onRetake,
-                modifier = Modifier.weight(1f),
-                shape = CircleShape
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("Retake Pic 3", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
-            Button(
-                onClick = onNewShot,
-                modifier = Modifier.weight(1f),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF00FF88),
-                    contentColor = Color.Black
+                if (finalGripBitmap != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(210.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                    ) {
+                        Image(
+                            bitmap = finalGripBitmap.asImageBitmap(),
+                            contentDescription = "Final Grip Photo",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        ButtCapHandleOverlay(
+                            targetBevel = target.targetBevel,
+                            supportTargetBevel = target.supportTargetBevel,
+                            targetColor = target.bevelColor,
+                            isLeftHanded = isLeftHanded,
+                            showSilhouette = false
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                GripMatchGauge(
+                    score = result.score,
+                    ringColor = when {
+                        result.score >= 90 -> Color(0xFF00FF88)
+                        result.score >= 70 -> Color(0xFFFFD740)
+                        else -> Color(0xFFFF5252)
+                    }
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = result.sourceEngine,
+                    color = Color(0xFF00E5FF),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = result.headline,
+                    color = when {
+                        result.score >= 90 -> Color(0xFF00FF88)
+                        result.score >= 70 -> Color(0xFFFFD740)
+                        else -> Color(0xFFFF5252)
+                    },
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "Detected: ${result.detectedGripLabel}",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xE60A0F12)),
+                    border = BorderStroke(1.2.dp, Color(0xFF25323A))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = result.detail,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = target.fullGripInfo,
+                            color = Color.LightGray,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Another Shot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onRetake,
+                    modifier = Modifier.weight(1f),
+                    shape = CircleShape
+                ) {
+                    Text("Retake Pic 3", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = onNewShot,
+                    modifier = Modifier.weight(1f),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF00FF88),
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("Another Shot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
@@ -2564,79 +2701,4 @@ fun BaseKnuckleSpotOverlay(
             drawCircle(
                 color = spotColor.copy(alpha = 0.95f),
                 radius = 22.dp.toPx(),
-                center = knucklePoint,
-                style = Stroke(width = 2.dp.toPx())
-            )
-            drawCircle(
-                color = spotColor,
-                radius = 10.5.dp.toPx(),
-                center = knucklePoint
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 10.5.dp.toPx(),
-                center = knucklePoint,
-                style = Stroke(width = 2.dp.toPx())
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 3.dp.toPx(),
-                center = knucklePoint
-            )
-        }
-    }
-}
-
-@Composable
-fun GripMatchGauge(
-    score: Int,
-    ringColor: Color
-) {
-    val animatedSweep by animateFloatAsState(
-        targetValue = (score.coerceIn(0, 100) / 100f) * 360f,
-        label = "matchSweep"
-    )
-
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(62.dp)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            drawArc(
-                color = ringColor.copy(alpha = 0.22f),
-                startAngle = 0f,
-                sweepAngle = 360f,
-                useCenter = false,
-                style = Stroke(width = 6.dp.toPx())
-            )
-            drawArc(
-                color = ringColor,
-                startAngle = -90f,
-                sweepAngle = animatedSweep,
-                useCenter = false,
-                style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
-            )
-        }
-        Text(
-            text = "$score%",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp,
-            maxLines = 1
-        )
-    }
-}
-
-private fun resolveHandPair(hands: List<TrackedHand>, isLeftHanded: Boolean): HandPair {
-    if (hands.isEmpty()) return HandPair(anchorHand = null, supportHand = null)
-    if (hands.size == 1) {
-        return HandPair(anchorHand = hands.first(), supportHand = null)
-    }
-
-    val anchorIndex = hands.indexOfFirst { hand ->
-        hand.isLeftDetected != null && hand.isLeftDetected == isLeftHanded
-    }.let { if (it >= 0) it else 0 }
-
-    val supportIndex = if (anchorIndex == 0) 1 else 0
-    return HandPair(
-        anchorHand = hands[anchorIndex],
-        supportHand = hands[supportIndex]
-    )
-}
+                center =
