@@ -591,11 +591,11 @@ object OnlineGeminiGripAnalyzer {
                 }
             """.trimIndent()
 
-            val requestContent = content {
-                handleBitmap?.let { image(scaleDownForUpload(it)) }
-                handInGripBitmap?.let { image(scaleDownForUpload(it)) }
-                finalGripBitmap?.let { image(scaleDownForUpload(it)) }
-                text(promptText)
+            val requestContent = com.google.firebase.ai.type.content {
+    handleBitmap?.let { image(scaleDownForUpload(it)) }
+    handInGripBitmap?.let { image(scaleDownForUpload(it)) }
+    finalGripBitmap?.let { image(scaleDownForUpload(it)) }
+    text(promptText)
             }
 
             val response = model.generateContent(requestContent)
