@@ -215,7 +215,6 @@ val BEVEL_COLORS: Map<Int, Color> = mapOf(
 val DOMINANT_HAND_COLOR = Color(0xFF00FF88)
 val SUPPORT_HAND_COLOR = Color(0xFF00E5FF)
 
-// Replace these resource IDs if you name your drawable files differently in res/drawable/
 object AppBackgrounds {
     @DrawableRes val LoadUpStadium = R.drawable.bg_futuristic_stadium
     @DrawableRes val TennisCourt = R.drawable.bg_court_tennis
@@ -375,7 +374,7 @@ fun getGripTarget(
                     targetBevel = 1,
                     bevelColor = BEVEL_COLORS.getValue(1),
                     shortInstruction = "Place your $anchorLabel index base knuckle on top Bevel 1.",
-                    fullGripInfo = "Tennis 1H Eastern Backhand ($playerSide, Bevel 1) for $shotName: Firms up the wrist behind the ball."
+                    fullGripInfo = "Tennis 1H Eastern Backhand ($playerSide, Bevel 1) for$shotName: Firms up the wrist behind the ball."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -383,7 +382,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Tennis 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel hand on Continental (Bevel 2) + top $topHandLabel hand on Bevel 7/6."
+                    fullGripInfo = "Tennis 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel hand on Continental (Bevel 2) + top$topHandLabel hand on Bevel 7/6."
                 )
             }
         }
@@ -433,7 +432,7 @@ fun getGripTarget(
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "Keep your $anchorLabel index base knuckle on Bevel 2.",
-                    fullGripInfo = "Padel 1H Backhand ($playerSide, Bevel 2) for $shotName: Relaxed wrist for wall exits and volleys."
+                    fullGripInfo = "Padel 1H Backhand ($playerSide, Bevel 2) for$shotName: Relaxed wrist for wall exits and volleys."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -441,7 +440,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Padel 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel knuckle on Bevel 2 and top $topHandLabel knuckle on Bevel 7."
+                    fullGripInfo = "Padel 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel knuckle on Bevel 2 and top$topHandLabel knuckle on Bevel 7."
                 )
             }
         }
@@ -480,7 +479,7 @@ fun getGripTarget(
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "Place your $anchorLabel index base knuckle on Bevel 2.",
-                    fullGripInfo = "Pickleball 1H Backhand ($playerSide, Bevel 2) for $shotName: Steady control for dinks, blocks, and resets."
+                    fullGripInfo = "Pickleball 1H Backhand ($playerSide, Bevel 2) for$shotName: Steady control for dinks, blocks, and resets."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -488,7 +487,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Pickleball 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel knuckle on Bevel 2 and top $topHandLabel knuckle on Bevel 7."
+                    fullGripInfo = "Pickleball 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel knuckle on Bevel 2 and top$topHandLabel knuckle on Bevel 7."
                 )
             }
         }
@@ -2117,11 +2116,11 @@ private fun ThreePictureCaptureScreen(
 
         if (captureStage != CaptureStage.HANDLE_PICTURE) {
             val pair = resolveHandPair(handState.hands, isLeftHanded)
-            val anchorBevel = pair.anchorHand?.landmarks?.getOrNull(5)?.let {
-                estimateBevelFromNormalizedPoint(it, isLeftHanded)
+            val anchorBevel: Int? = pair.anchorHand?.landmarks?.getOrNull(5)?.let { point: SmoothedPoint ->
+                estimateBevelFromNormalizedPoint(point, isLeftHanded)
             }
-            val supportBevel = pair.supportHand?.landmarks?.getOrNull(5)?.let {
-                estimateBevelFromNormalizedPoint(it, isLeftHanded)
+            val supportBevel: Int? = pair.supportHand?.landmarks?.getOrNull(5)?.let { point: SmoothedPoint ->
+                estimateBevelFromNormalizedPoint(point, isLeftHanded)
             }
 
             Box(
@@ -2701,4 +2700,79 @@ fun BaseKnuckleSpotOverlay(
             drawCircle(
                 color = spotColor.copy(alpha = 0.95f),
                 radius = 22.dp.toPx(),
-                center =
+                center = knucklePoint,
+                style = Stroke(width = 2.dp.toPx())
+            )
+            drawCircle(
+                color = spotColor,
+                radius = 10.5.dp.toPx(),
+                center = knucklePoint
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 10.5.dp.toPx(),
+                center = knucklePoint,
+                style = Stroke(width = 2.dp.toPx())
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 3.dp.toPx(),
+                center = knucklePoint
+            )
+        }
+    }
+}
+
+@Composable
+fun GripMatchGauge(
+    score: Int,
+    ringColor: Color
+) {
+    val animatedSweep by animateFloatAsState(
+        targetValue = (score.coerceIn(0, 100) / 100f) * 360f,
+        label = "matchSweep"
+    )
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(62.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawArc(
+                color = ringColor.copy(alpha = 0.22f),
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                style = Stroke(width = 6.dp.toPx())
+            )
+            drawArc(
+                color = ringColor,
+                startAngle = -90f,
+                sweepAngle = animatedSweep,
+                useCenter = false,
+                style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
+            )
+        }
+        Text(
+            text = "$score%",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1
+        )
+    }
+}
+
+private fun resolveHandPair(hands: List<TrackedHand>, isLeftHanded: Boolean): HandPair {
+    if (hands.isEmpty()) return HandPair(anchorHand = null, supportHand = null)
+    if (hands.size == 1) {
+        return HandPair(anchorHand = hands.first(), supportHand = null)
+    }
+
+    val anchorIndex = hands.indexOfFirst { hand: TrackedHand ->
+        hand.isLeftDetected != null && hand.isLeftDetected == isLeftHanded
+    }.let { idx: Int -> if (idx >= 0) idx else 0 }
+
+    val supportIndex = if (anchorIndex == 0) 1 else 0
+    return HandPair(
+        anchorHand = hands[anchorIndex],
+        supportHand = hands[supportIndex]
+    )
+}
