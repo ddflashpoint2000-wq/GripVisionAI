@@ -16,7 +16,7 @@ jobs:
       - name: Rename uploaded drawable files
         run: |
           python3 - << 'EOF'
-          import glob, os
+          import os
 
           drawable_dir = "app/src/main/res/drawable"
           targets = [
@@ -27,12 +27,19 @@ jobs:
           ]
 
           existing = sorted(
-              f for f in os.listdir(drawable_dir)
-              if f not in (".gitkeep",) and f not in targets
+              (
+                  f
+                  for f in os.listdir(drawable_dir)
+                  if f not in (".gitkeep",) and f not in targets
+              ),
+              key=lambda name: os.path.getmtime(os.path.join(drawable_dir, name)),
           )
 
           for src, dst in zip(existing, targets):
-              os.rename(os.path.join(drawable_dir, src), os.path.join(drawable_dir, dst))
+              os.rename(
+                  os.path.join(drawable_dir, src),
+                  os.path.join(drawable_dir, dst),
+              )
           EOF
 
       - name: Commit renamed files
