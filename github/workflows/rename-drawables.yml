@@ -1,0 +1,46 @@
+name: Rename Drawables
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rename-drawables:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rename uploaded drawable files
+        run: |
+          python3 - << 'EOF'
+          import glob, os
+
+          drawable_dir = "app/src/main/res/drawable"
+          targets = [
+              "bg_futuristic_stadium.png",
+              "bg_court_tennis.png",
+              "bg_court_padel.png",
+              "bg_court_pickleball.png",
+          ]
+
+          existing = sorted(
+              f for f in os.listdir(drawable_dir)
+              if f not in (".gitkeep",) and f not in targets
+          )
+
+          for src, dst in zip(existing, targets):
+              os.rename(os.path.join(drawable_dir, src), os.path.join(drawable_dir, dst))
+          EOF
+
+      - name: Commit renamed files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --staged --quiet; then
+            git commit -m "Rename drawable background images"
+            git push
+          fi
