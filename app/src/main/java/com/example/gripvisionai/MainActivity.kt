@@ -387,7 +387,7 @@ fun getGripTarget(
                     targetBevel = 1,
                     bevelColor = BEVEL_COLORS.getValue(1),
                     shortInstruction = "Place your $anchorLabel index base knuckle on top Bevel 1.",
-                    fullGripInfo = "Tennis 1H Eastern Backhand ($playerSide, Bevel 1) for $shotName: Firms up the wrist behind the ball."
+                    fullGripInfo = "Tennis 1H Eastern Backhand ($playerSide, Bevel 1) for$shotName: Firms up the wrist behind the ball."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -395,7 +395,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Tennis 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel hand on Continental (Bevel 2) + top $topHandLabel hand on Bevel 7/6."
+                    fullGripInfo = "Tennis 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel hand on Continental (Bevel 2) + top$topHandLabel hand on Bevel 7/6."
                 )
             }
         }
@@ -445,7 +445,7 @@ fun getGripTarget(
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "Keep your $anchorLabel index base knuckle on Bevel 2.",
-                    fullGripInfo = "Padel 1H Backhand ($playerSide, Bevel 2) for $shotName: Relaxed wrist for wall exits and volleys."
+                    fullGripInfo = "Padel 1H Backhand ($playerSide, Bevel 2) for$shotName: Relaxed wrist for wall exits and volleys."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -453,7 +453,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Padel 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel knuckle on Bevel 2 and top $topHandLabel knuckle on Bevel 7."
+                    fullGripInfo = "Padel 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel knuckle on Bevel 2 and top$topHandLabel knuckle on Bevel 7."
                 )
             }
         }
@@ -492,7 +492,7 @@ fun getGripTarget(
                     targetBevel = 2,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "Place your $anchorLabel index base knuckle on Bevel 2.",
-                    fullGripInfo = "Pickleball 1H Backhand ($playerSide, Bevel 2) for $shotName: Steady control for dinks, blocks, and resets."
+                    fullGripInfo = "Pickleball 1H Backhand ($playerSide, Bevel 2) for$shotName: Steady control for dinks, blocks, and resets."
                 )
                 BackhandStyle.TWO_HANDED -> GripTarget(
                     gripName = "2H Backhand (Bevel 2 + 7)",
@@ -500,7 +500,7 @@ fun getGripTarget(
                     supportTargetBevel = 7,
                     bevelColor = BEVEL_COLORS.getValue(2),
                     shortInstruction = "$playerSide: Green ($anchorLabel) on Bevel 2, Cyan ($topHandLabel) on Bevel 7.",
-                    fullGripInfo = "Pickleball 2H Backhand ($playerSide) for $shotName: Bottom $anchorLabel knuckle on Bevel 2 and top $topHandLabel knuckle on Bevel 7."
+                    fullGripInfo = "Pickleball 2H Backhand ($playerSide) for$shotName: Bottom $anchorLabel knuckle on Bevel 2 and top$topHandLabel knuckle on Bevel 7."
                 )
             }
         }
@@ -517,6 +517,44 @@ fun bevelToGripName(bevel: Int): String = when (bevel) {
     7 -> "2H Top-Hand Eastern (Bevel 7)"
     8 -> "Extreme / Opposite Continental (Bevel 8)"
     else -> "Bevel $bevel"
+}
+
+data class SmoothedPoint(
+    val x: Float,
+    val y: Float,
+    val z: Float = 0f
+)
+
+data class TrackedHand(
+    val landmarks: List<SmoothedPoint>,
+    val isLeftDetected: Boolean?
+)
+
+data class HandTrackingState(
+    val hands: List<TrackedHand> = emptyList(),
+    val isHandVisible: Boolean = false
+)
+
+data class HandPair(
+    val anchorHand: TrackedHand?,
+    val supportHand: TrackedHand?
+)
+
+fun resolveHandPair(hands: List<TrackedHand>, isLeftHanded: Boolean): HandPair {
+    if (hands.isEmpty()) return HandPair(anchorHand = null, supportHand = null)
+    if (hands.size == 1) {
+        return HandPair(anchorHand = hands.first(), supportHand = null)
+    }
+
+    val anchorIndex = hands.indexOfFirst { hand: TrackedHand ->
+        hand.isLeftDetected != null && hand.isLeftDetected == isLeftHanded
+    }.let { idx: Int -> if (idx >= 0) idx else 0 }
+
+    val supportIndex = if (anchorIndex == 0) 1 else 0
+    return HandPair(
+        anchorHand = hands[anchorIndex],
+        supportHand = hands[supportIndex]
+    )
 }
 
 fun estimateBevelFromNormalizedPoint(
@@ -580,27 +618,6 @@ fun buttCapBevelPosition(
     }
 }
 
-data class SmoothedPoint(
-    val x: Float,
-    val y: Float,
-    val z: Float = 0f
-)
-
-data class TrackedHand(
-    val landmarks: List<SmoothedPoint>,
-    val isLeftDetected: Boolean?
-)
-
-data class HandTrackingState(
-    val hands: List<TrackedHand> = emptyList(),
-    val isHandVisible: Boolean = false
-)
-
-data class HandPair(
-    val anchorHand: TrackedHand?,
-    val supportHand: TrackedHand?
-)
-
 // ==========================================
 // 2. ONLINE GEMINI MULTIMODAL GRIP ANALYZER
 // ==========================================
@@ -635,7 +652,7 @@ object OnlineGeminiGripAnalyzer {
                 - Stroke: ${stroke.label} (${if (isTwoHandedBackhand) "Two-Handed 2H" else "One-Handed 1H"})
                 - Shot: $shotName
                 - Target Grip: ${target.gripName}
-                - Target Primary Bevel (index base knuckle of $dominantHandWord hand): Bevel ${target.targetBevel}${if (isTwoHandedBackhand) " - Target Support Top Hand ($topHandSide index base knuckle): Bevel ${target.supportTargetBevel ?: 7} (or Bevel 6)" else ""}
+                - Target Primary Bevel (index base knuckle of $dominantHandWord hand): Bevel ${target.targetBevel}${if (isTwoHandedBackhand) " - Target Support Top Hand ($topHandSide index base knuckle): Bevel${target.supportTargetBevel ?: 7} (or Bevel 6)" else ""}
 
                 Photos attached in order:
                 1. Handle reference photo (if provided)
@@ -791,10 +808,10 @@ class GripHandTracker(
             if (wantLive) {
                 val detected = detectHandsInBitmap(rotatedBitmap, maxHandsToTrack)
                 if (detected.isNotEmpty()) {
-                    val updatedSlots = mutableListOf<List<SmoothedPoint>>()
-                    val smoothedHands = detected.mapIndexed { idx, hand ->
-                        val prev = smoothedSlots.getOrNull(idx)
-                        val sm = smoothPoints(hand.landmarks, prev)
+                    val updatedSlots: MutableList<List<SmoothedPoint>> = mutableListOf()
+                    val smoothedHands: List<TrackedHand> = detected.mapIndexed { idx: Int, hand: TrackedHand ->
+                        val prev: List<SmoothedPoint>? = smoothedSlots.getOrNull(idx)
+                        val sm: List<SmoothedPoint> = smoothPoints(hand.landmarks, prev)
                         updatedSlots.add(sm)
                         TrackedHand(landmarks = sm, isLeftDetected = hand.isLeftDetected)
                     }
@@ -832,7 +849,7 @@ class GripHandTracker(
                             else -> null
                         }
                         TrackedHand(
-                            landmarks = lmList.map { SmoothedPoint(it.x(), it.y(), it.z()) },
+                            landmarks = lmList.map { lm -> SmoothedPoint(lm.x(), lm.y(), lm.z()) },
                             isLeftDetected = isLeft
                         )
                     }
@@ -866,8 +883,8 @@ class GripHandTracker(
         prev: List<SmoothedPoint>?
     ): List<SmoothedPoint> {
         if (prev == null || prev.size != raw.size) return raw
-        return raw.mapIndexed { idx, cur ->
-            val p = prev[idx]
+        return raw.mapIndexed { idx: Int, cur: SmoothedPoint ->
+            val p: SmoothedPoint = prev[idx]
             val dx = cur.x - p.x
             val dy = cur.y - p.y
             val dist = hypot(dx.toDouble(), dy.toDouble()).toFloat()
@@ -2061,18 +2078,20 @@ private fun ThreePictureCaptureScreen(
         }
     }
 
-    val pair = remember(handState.hands, isLeftHanded) {
+    val pair: HandPair = remember(handState.hands, isLeftHanded) {
         resolveHandPair(handState.hands, isLeftHanded)
     }
-    val anchorBevel: Int? = pair.anchorHand?.landmarks?.getOrNull(5)?.let { point ->
-        estimateBevelFromNormalizedPoint(point, isLeftHanded)
+    val anchorPoint: SmoothedPoint? = pair.anchorHand?.landmarks?.getOrNull(5)
+    val supportPoint: SmoothedPoint? = pair.supportHand?.landmarks?.getOrNull(5)
+
+    val anchorBevel: Int? = anchorPoint?.let { pt: SmoothedPoint ->
+        estimateBevelFromNormalizedPoint(pt, isLeftHanded)
     }
-    val supportBevel: Int? = pair.supportHand?.landmarks?.getOrNull(5)?.let { point ->
-        estimateBevelFromNormalizedPoint(point, isLeftHanded)
+    val supportBevel: Int? = supportPoint?.let { pt: SmoothedPoint ->
+        estimateBevelFromNormalizedPoint(pt, isLeftHanded)
     }
 
-    // Proximity closeness (0f = far, 1f = matched on target bevel) to drive growing pulse
-    val closenessToTarget by remember(
+    val closenessToTarget: Float by remember(
         captureStage,
         handState.isHandVisible,
         anchorBevel,
@@ -2097,10 +2116,10 @@ private fun ThreePictureCaptureScreen(
                 }
                 if (isTwoHandedBackhand) {
                     val expectedSupport = target.supportTargetBevel ?: 7
-                    val supportDist = supportBevel?.let {
+                    val supportDist = supportBevel?.let { b: Int ->
                         minOf(
-                            circularBevelDistance(it, expectedSupport),
-                            circularBevelDistance(it, 6)
+                            circularBevelDistance(b, expectedSupport),
+                            circularBevelDistance(b, 6)
                         )
                     } ?: 4
                     val supportCloseness = when (supportDist) {
@@ -2244,4 +2263,703 @@ private fun ThreePictureCaptureScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    
+                    .background(Color.White.copy(alpha = animatedFlashAlpha.coerceIn(0f, 0.9f)))
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(
+                    selected = false,
+                    onClick = onMainMenu,
+                    label = { Text("Main", fontSize = 11.sp, maxLines = 1) }
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = onBackToPreview,
+                    label = { Text("← Grip", fontSize = 11.sp, maxLines = 1) }
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .background(
+                        color = if (aiMode == AiAnalysisMode.ONLINE_GEMINI) Color(0xFF00E5FF) else Color(0xFF28333A),
+                        shape = CircleShape
+                    )
+                    .clickable { onToggleAiMode() }
+                    .padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = aiMode.badge,
+                    color = if (aiMode == AiAnalysisMode.ONLINE_GEMINI) Color.Black else Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1
+                )
+            }
+        }
+
+        if (captureStage != CaptureStage.HANDLE_PICTURE) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 50.dp, start = 12.dp, end = 12.dp)
+                    .background(Color(0xDD10181C), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = if (isTwoHandedBackhand) {
+                        val b1 = anchorBevel?.toString() ?: "--"
+                        val b2 = supportBevel?.toString() ?: "--"
+                        "2H Knuckles • Green: B$b1 (Tgt ${target.targetBevel}) • Cyan: B$b2 (Tgt 7)"
+                    } else {
+                        val b1 = anchorBevel?.toString() ?: "--"
+                        "Base Knuckle • Bevel $b1 (Target Bevel ${target.targetBevel})"
+                    },
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CaptureStage.entries.forEach { stage ->
+                    val done = when (stage) {
+                        CaptureStage.HANDLE_PICTURE -> handleBitmap != null
+                        CaptureStage.HAND_ON_HANDLE_PICTURE -> handInGripBitmap != null
+                        CaptureStage.FINAL_GRIP_PICTURE -> finalGripBitmap != null
+                    }
+                    val active = stage == captureStage
+                    Box(
+                        modifier = Modifier
+                            .size(if (active) 11.dp else 8.dp)
+                            .clip(CircleShape)
+                            .background(
+                                when {
+                                    done -> Color(0xFF00FF88)
+                                    active -> Color(0xFF00E5FF)
+                                    else -> Color(0xFF3A4850)
+                                }
+                            )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xE6121A1E))
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "${captureStage.title} • ${aiMode.badge}",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = captureStage.prompt,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (target.supportTargetBevel != null) {
+                            "Target: ${target.gripName} (Bottom Bevel ${target.targetBevel} + Top Bevel ${target.supportTargetBevel})"
+                        } else {
+                            "Target: ${target.gripName} (Bevel ${target.targetBevel})"
+                        },
+                        color = target.bevelColor,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    if (captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE && holdProgress > 0f) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { holdProgress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(CircleShape),
+                            color = Color(0xFF00FF88),
+                            trackColor = Color(0xFF28333A)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            when (captureStage) {
+                CaptureStage.HANDLE_PICTURE -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                if (handleBitmap == null) {
+                                    tracker.captureNextFrame = true
+                                } else {
+                                    onHandleCaptured(null)
+                                }
+                            },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = if (handleBitmap == null) "TAKE PIC 1" else "RETAKE PIC 1",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        if (handleBitmap != null) {
+                            Button(
+                                onClick = { onCaptureStageChange(CaptureStage.HAND_ON_HANDLE_PICTURE) },
+                                shape = CircleShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF00FF88),
+                                    contentColor = Color.Black
+                                ),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = "NEXT: KNUCKLE MATCH →",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                CaptureStage.HAND_ON_HANDLE_PICTURE -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                autoTriggeredForStage2 = true
+                                screenFlashAlpha = 0.85f
+                                tracker.captureNextFrame = true
+                            },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = "SNAP & NEXT →",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
+                CaptureStage.FINAL_GRIP_PICTURE -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                if (finalGripBitmap == null) {
+                                    tracker.captureNextFrame = true
+                                } else {
+                                    onFinalGripCaptured(null)
+                                }
+                            },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = if (finalGripBitmap == null) "TAKE AI PIC" else "RETAKE AI PIC",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        if (finalGripBitmap != null) {
+                            Button(
+                                enabled = !isCheckingWithAi,
+                                onClick = {
+                                    isCheckingWithAi = true
+                                    coroutineScope.launch {
+                                        val picsToCheck = listOfNotNull(handInGripBitmap, finalGripBitmap)
+                                        val aiResult = if (aiMode == AiAnalysisMode.ONLINE_GEMINI) {
+                                            val onlineAttempt = OnlineGeminiGripAnalyzer.analyze(
+                                                handleBitmap = handleBitmap,
+                                                handInGripBitmap = handInGripBitmap,
+                                                finalGripBitmap = finalGripBitmap,
+                                                sport = sport,
+                                                stroke = stroke,
+                                                shotName = shotName,
+                                                target = target,
+                                                isLeftHanded = isLeftHanded,
+                                                isTwoHandedBackhand = isTwoHandedBackhand
+                                            )
+                                            onlineAttempt.getOrElse {
+                                                withContext(Dispatchers.Default) {
+                                                    tracker.analyzeGripBitmapsOffline(
+                                                        bitmaps = picsToCheck,
+                                                        target = target,
+                                                        isLeftHanded = isLeftHanded,
+                                                        isTwoHandedBackhand = isTwoHandedBackhand,
+                                                        shotName = shotName,
+                                                        fallbackNotice = "Offline Fallback (No Online Connection)"
+                                                    )
+                                                }
+                                            }
+                                        } else {
+                                            withContext(Dispatchers.Default) {
+                                                tracker.analyzeGripBitmapsOffline(
+                                                    bitmaps = picsToCheck,
+                                                    target = target,
+                                                    isLeftHanded = isLeftHanded,
+                                                    isTwoHandedBackhand = isTwoHandedBackhand,
+                                                    shotName = shotName
+                                                )
+                                            }
+                                        }
+                                        isCheckingWithAi = false
+                                        onRunAiCheck(aiResult)
+                                    }
+                                },
+                                shape = CircleShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF00FF88),
+                                    contentColor = Color.Black
+                                ),
+                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
+                            ) {
+                                if (isCheckingWithAi) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = Color.Black
+                                    )
+                                } else {
+                                    Text(
+                                        text = "AI CHECK GRIP →",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AiGripResultScreen(
+    sport: GripSport,
+    stroke: StrokeType,
+    shotName: String,
+    target: GripTarget,
+    isLeftHanded: Boolean,
+    finalGripBitmap: Bitmap?,
+    result: GripAuditResult,
+    onRetake: () -> Unit,
+    onNewShot: () -> Unit,
+    onMainMenu: () -> Unit
+) {
+    FuturisticCourtBackdrop(
+        imageRes = AppBackgrounds.forSport(sport),
+        scrimAlpha = 0.72f
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${sport.label} • ${stroke.label} • $shotName",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(onClick = onMainMenu, shape = CircleShape) {
+                    Text("Main Menu", color = Color(0xFF00FF88), fontSize = 12.sp)
+                }
+            }
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (finalGripBitmap != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(210.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                    ) {
+                        Image(
+                            bitmap = finalGripBitmap.asImageBitmap(),
+                            contentDescription = "Final Grip Photo",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        ButtCapHandleOverlay(
+                            targetBevel = target.targetBevel,
+                            supportTargetBevel = target.supportTargetBevel,
+                            targetColor = target.bevelColor,
+                            isLeftHanded = isLeftHanded,
+                            showSilhouette = false
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                GripMatchGauge(
+                    score = result.score,
+                    ringColor = when {
+                        result.score >= 90 -> Color(0xFF00FF88)
+                        result.score >= 70 -> Color(0xFFFFD740)
+                        else -> Color(0xFFFF5252)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = result.sourceEngine,
+                    color = Color(0xFF00E5FF),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = result.headline,
+                    color = when {
+                        result.score >= 90 -> Color(0xFF00FF88)
+                        result.score >= 70 -> Color(0xFFFFD740)
+                        else -> Color(0xFFFF5252)
+                    },
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "Detected: ${result.detectedGripLabel}",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xE60A0F12)),
+                    border = BorderStroke(1.2.dp, Color(0xFF25323A))
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = result.detail,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = target.fullGripInfo,
+                            color = Color.LightGray,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onRetake,
+                    modifier = Modifier.weight(1f),
+                    shape = CircleShape
+                ) {
+                    Text("Retake AI Pic", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = onNewShot,
+                    modifier = Modifier.weight(1f),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF00FF88),
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("Another Shot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 6. BUTT-CAP HANDLE SILHOUETTE & KNUCKLE SPOTS
+// ==========================================
+
+@Composable
+fun ButtCapHandleOverlay(
+    targetBevel: Int,
+    supportTargetBevel: Int? = null,
+    targetColor: Color,
+    isLeftHanded: Boolean,
+    showSilhouette: Boolean,
+    proximityCloseness: Float = 0f
+) {
+    val clampedProximity = proximityCloseness.coerceIn(0f, 1f)
+    val pulseDurationMs = (950 - (clampedProximity * 600)).roundToInt().coerceIn(320, 950)
+
+    val pulseTransition = rememberInfiniteTransition(label = "bevelProximityPulse")
+    val pulseWave by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = pulseDurationMs, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseWave"
+    )
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+
+        val centerX = w * OVERLAY_CENTER_X
+        val centerY = h * OVERLAY_CENTER_Y
+
+        val halfW = w * OVERLAY_HALF_W
+        val halfH = h * OVERLAY_HALF_H
+        val bevelCutX = halfW * 0.26f
+        val bevelCutY = halfH * 0.34f
+
+        if (showSilhouette) {
+            val capPath = Path().apply {
+                moveTo(centerX - halfW + bevelCutX, centerY - halfH)
+                lineTo(centerX + halfW - bevelCutX, centerY - halfH)
+                lineTo(centerX + halfW, centerY - halfH + bevelCutY)
+                lineTo(centerX + halfW, centerY + halfH - bevelCutY)
+                lineTo(centerX + halfW - bevelCutX, centerY + halfH)
+                lineTo(centerX - halfW + bevelCutX, centerY + halfH)
+                lineTo(centerX - halfW, centerY + halfH - bevelCutY)
+                lineTo(centerX - halfW, centerY - halfH + bevelCutY)
+                close()
+            }
+
+            drawPath(
+                path = capPath,
+                color = Color.White.copy(alpha = 0.32f),
+                style = Stroke(
+                    width = 2.5.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 9f), 0f)
+                )
+            )
+        }
+
+        val textPaint = android.graphics.Paint().apply {
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = 11.sp.toPx()
+            isFakeBoldText = true
+            isAntiAlias = true
+        }
+
+        val proximityGrowthScale = 1f + (clampedProximity * 0.55f) + (pulseWave * (0.14f + clampedProximity * 0.35f))
+
+        for (bevel in 1..8) {
+            val pos = buttCapBevelPosition(
+                bevel = bevel,
+                isLeftHanded = isLeftHanded,
+                centerX = centerX,
+                centerY = centerY,
+                halfW = halfW,
+                halfH = halfH
+            )
+
+            val isPrimaryTarget = (bevel == targetBevel)
+            val isSupportTarget = (supportTargetBevel != null && bevel == supportTargetBevel)
+            val isAnyTarget = isPrimaryTarget || isSupportTarget
+            val color = when {
+                isPrimaryTarget -> targetColor
+                isSupportTarget -> SUPPORT_HAND_COLOR
+                else -> BEVEL_COLORS.getValue(bevel)
+            }
+
+            val baseRadiusDp = when {
+                isPrimaryTarget -> 12f * proximityGrowthScale
+                isSupportTarget -> 11f * (1f + clampedProximity * 0.3f + pulseWave * 0.12f)
+                else -> 9f
+            }
+
+            if (isAnyTarget) {
+                val outerHaloRadiusDp = (18f + clampedProximity * 14f) * (0.85f + pulseWave * 0.35f)
+                drawCircle(
+                    color = color.copy(alpha = (0.24f + clampedProximity * 0.25f).coerceAtMost(0.55f)),
+                    radius = outerHaloRadiusDp.dp.toPx(),
+                    center = pos
+                )
+            }
+
+            drawCircle(
+                color = if (isAnyTarget) color else Color(0xCC10181C),
+                radius = baseRadiusDp.dp.toPx(),
+                center = pos
+            )
+            drawCircle(
+                color = color,
+                radius = baseRadiusDp.dp.toPx(),
+                center = pos,
+                style = Stroke(width = if (isAnyTarget) 2.2.dp.toPx() else 1.5.dp.toPx())
+            )
+
+            textPaint.color = if (isAnyTarget) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+            textPaint.textSize = (if (isPrimaryTarget) 11f * (1f + clampedProximity * 0.25f) else 11f).sp.toPx()
+            drawContext.canvas.nativeCanvas.drawText(
+                bevel.toString(),
+                pos.x,
+                pos.y + 4.dp.toPx(),
+                textPaint
+            )
+        }
+    }
+}
+
+@Composable
+fun BaseKnuckleSpotOverlay(
+    hands: List<TrackedHand>,
+    isLeftHanded: Boolean,
+    isTwoHandedBackhand: Boolean,
+    singleHandColor: Color
+) {
+    if (hands.isEmpty()) return
+
+    val pair: HandPair = resolveHandPair(hands, isLeftHanded)
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+
+        hands.forEach { hand: TrackedHand ->
+            if (hand.landmarks.size < 21) return@forEach
+            val lm5: SmoothedPoint = hand.landmarks[5]
+            val knucklePoint = Offset(lm5.x * w, lm5.y * h)
+
+            val isAnchor = (hand === pair.anchorHand)
+            val spotColor = when {
+                !isTwoHandedBackhand -> singleHandColor
+                isAnchor -> DOMINANT_HAND_COLOR
+                else -> SUPPORT_HAND_COLOR
+            }
+
+            drawCircle(
+                color = spotColor.copy(alpha = 0.28f),
+                radius = 22.dp.toPx(),
+                center = knucklePoint
+            )
+            drawCircle(
+                color = spotColor.copy(alpha = 0.95f),
+                radius = 22.dp.toPx(),
+                center = knucklePoint,
+                style = Stroke(width = 2.dp.toPx())
+            )
+            drawCircle(
+                color = spotColor,
+                radius = 10.5.dp.toPx(),
+                center = knucklePoint
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 10.5.dp.toPx(),
+                center = knucklePoint,
+                style = Stroke(width = 2.dp.toPx())
+            )
+            drawCircle(
+                color = Color.White,
+                radius = 3.dp.toPx(),
+                center = knucklePoint
+            )
+        }
+    }
+}
+
+@Composable
+fun GripMatchGauge(
+    score: Int,
+    ringColor: Color
+) {
+    val animatedSweep by animateFloatAsState(
+        targetValue = (score.coerceIn(0, 100) / 100f) * 360f,
+        label = "matchSweep"
+    )
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(62.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawArc(
+                color = ringColor.copy(alpha = 0.22f),
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                style = Stroke(width = 6.dp.toPx())
+            )
+            drawArc(
+                color = ringColor,
+                startAngle = -90f,
+                sweepAngle = animatedSweep,
+                useCenter = false,
+                style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
+            )
+        }
+        Text(
+            text = "$score%",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1
+        )
+    }
+}
