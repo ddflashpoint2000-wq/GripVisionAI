@@ -14,6 +14,7 @@ import android.graphics.Paint as AndroidPaint
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -60,7 +61,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -115,8 +115,8 @@ const val OVERLAY_CENTER_Y = 0.37f
 const val OVERLAY_HALF_W = 0.23f
 const val OVERLAY_HALF_H = 0.125f
 
-private const val KNUCKLE_HOLD_MS = 650L
-private const val AUTO_CAPTURE_CONFIRM_SECONDS = 8
+// Short lock-in window so jitter doesn't misfire, while still feeling instant on match
+private const val KNUCKLE_LOCK_MS = 250L
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -177,12 +177,12 @@ enum class CaptureStage(val stepNumber: Int, val title: String, val prompt: Stri
     HAND_ON_HANDLE_PICTURE(
         stepNumber = 2,
         title = "Pic 2 of 3 • Knuckle Bevel Match",
-        prompt = "Hold your base knuckle on the target bevel — it will auto-capture when matched."
+        prompt = "Connect your base knuckle to the target bevel to auto-capture & move on."
     ),
     FINAL_GRIP_PICTURE(
         stepNumber = 3,
-        title = "Pic 3 of 3 • Final Grip Angle",
-        prompt = "Take one last picture of your grip so AI can check it."
+        title = "Pic 3 of 3 • Hand on Racket AI Pic",
+        prompt = "Put your hand on the racket in grip & take the picture for AI to check."
     )
 }
 
@@ -1702,7 +1702,7 @@ fun GripPreviewScreen(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "1. Take pic of handle butt (Bevel 1 at top)\n2. Line up base knuckle on Bevel ${target.targetBevel} for auto-capture\n3. Take final grip pic so AI can check it",
+                        text = "1. Take pic of handle butt (Bevel 1 at top)\n2. Match base knuckle to Bevel ${target.targetBevel} to auto-capture & move on\n3. Take AI pic with hand on racket",
                         color = Color(0xFF00E5FF),
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -1729,7 +1729,7 @@ fun GripPreviewScreen(
                 contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
             ) {
                 Text(
-                    text = "START 3-PIC GRIP CHECK →",
+                    text = "START GRIP CHECK →",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
@@ -1739,7 +1739,7 @@ fun GripPreviewScreen(
 }
 
 // ==========================================
-// 5. MAIN APP FLOW & AUTO-CAPTURE KNUCKLE CHECK
+// 5. MAIN APP FLOW & INSTANT BEVEL AUTO-ADVANCE
 // ==========================================
 
 @Composable
@@ -1953,11 +1953,9 @@ private fun ThreePictureCaptureScreen(
     var isCheckingWithAi by remember { mutableStateOf(false) }
     var handState by remember { mutableStateOf(HandTrackingState()) }
 
-    // Auto-capture hold + 8-second confirmation banner state for Stage 2
     var holdStartMs by remember { mutableLongStateOf(0L) }
     var holdProgress by remember { mutableStateOf(0f) }
-    var autoCapturedThisStage by remember { mutableStateOf(false) }
-    var confirmSecondsLeft by remember { mutableIntStateOf(0) }
+    var autoTriggeredForStage2 by remember { mutableStateOf(false) }
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -1991,21 +1989,24 @@ private fun ThreePictureCaptureScreen(
 
     val liveTrackingEnabled = captureStage != CaptureStage.HANDLE_PICTURE
 
-    LaunchedEffect(captureStage, isTwoHandedBackhand, handInGripBitmap) {
+    LaunchedEffect(captureStage, isTwoHandedBackhand) {
         tracker.resetSmoothing()
         tracker.maxHandsToTrack = if (isTwoHandedBackhand) 2 else 1
-        tracker.runLiveHandDetection = liveTrackingEnabled &&
-            !(captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE && handInGripBitmap != null)
+        tracker.runLiveHandDetection = liveTrackingEnabled
         holdStartMs = 0L
         holdProgress = 0f
-        if (captureStage != CaptureStage.HAND_ON_HANDLE_PICTURE || handInGripBitmap == null) {
-            autoCapturedThisStage = false
-            confirmSecondsLeft = 0
+        if (captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE) {
+            autoTriggeredForStage2 = false
         }
         tracker.onFrameCaptured = { bitmap ->
             when (captureStage) {
                 CaptureStage.HANDLE_PICTURE -> onHandleCaptured(bitmap)
-                CaptureStage.HAND_ON_HANDLE_PICTURE -> onHandInGripCaptured(bitmap)
+                CaptureStage.HAND_ON_HANDLE_PICTURE -> {
+                    onHandInGripCaptured(bitmap)
+                    if (autoTriggeredForStage2) {
+                        onCaptureStageChange(CaptureStage.FINAL_GRIP_PICTURE)
+                    }
+                }
                 CaptureStage.FINAL_GRIP_PICTURE -> onFinalGripCaptured(bitmap)
             }
         }
@@ -2021,12 +2022,9 @@ private fun ThreePictureCaptureScreen(
         estimateBevelFromNormalizedPoint(point, isLeftHanded)
     }
 
-    // Monitor knuckle match during Pic 2 when no photo has been taken yet
-    LaunchedEffect(captureStage, anchorBevel, supportBevel, handInGripBitmap, autoCapturedThisStage) {
-        if (captureStage != CaptureStage.HAND_ON_HANDLE_PICTURE ||
-            handInGripBitmap != null ||
-            autoCapturedThisStage
-        ) {
+    // As soon as base knuckle connects to target bevel in Pic 2, capture & move straight to Pic 3
+    LaunchedEffect(captureStage, anchorBevel, supportBevel, autoTriggeredForStage2) {
+        if (captureStage != CaptureStage.HAND_ON_HANDLE_PICTURE || autoTriggeredForStage2) {
             holdStartMs = 0L
             holdProgress = 0f
             return@LaunchedEffect
@@ -2040,39 +2038,27 @@ private fun ThreePictureCaptureScreen(
             true
         }
 
-        if (anchorMatched && supportMatched) {
-            val now = android.os.SystemClock.uptimeMillis()
-            if (holdStartMs == 0L) {
-                holdStartMs = now
-            }
-            val elapsed = now - holdStartMs
-            holdProgress = (elapsed.toFloat() / KNUCKLE_HOLD_MS.toFloat()).coerceIn(0f, 1f)
-            if (elapsed >= KNUCKLE_HOLD_MS) {
-                autoCapturedThisStage = true
+        if (!anchorMatched || !supportMatched) {
+            holdStartMs = 0L
+            holdProgress = 0f
+            return@LaunchedEffect
+        }
+
+        if (holdStartMs == 0L) {
+            holdStartMs = SystemClock.uptimeMillis()
+        }
+
+        while (!autoTriggeredForStage2 && captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE) {
+            val elapsed = SystemClock.uptimeMillis() - holdStartMs
+            holdProgress = (elapsed.toFloat() / KNUCKLE_LOCK_MS.toFloat()).coerceIn(0f, 1f)
+            if (elapsed >= KNUCKLE_LOCK_MS) {
+                autoTriggeredForStage2 = true
                 holdStartMs = 0L
                 holdProgress = 1f
                 tracker.captureNextFrame = true
+                break
             }
-        } else {
-            holdStartMs = 0L
-            holdProgress = 0f
-        }
-    }
-
-    // 8-second confirmation countdown after auto-capture on Pic 2, then move on to Pic 3
-    LaunchedEffect(captureStage, handInGripBitmap, autoCapturedThisStage) {
-        if (captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE &&
-            handInGripBitmap != null &&
-            autoCapturedThisStage
-        ) {
-            for (sec in AUTO_CAPTURE_CONFIRM_SECONDS downTo 1) {
-                confirmSecondsLeft = sec
-                delay(1000L)
-            }
-            confirmSecondsLeft = 0
-            onCaptureStageChange(CaptureStage.FINAL_GRIP_PICTURE)
-        } else {
-            confirmSecondsLeft = 0
+            delay(35L)
         }
     }
 
@@ -2225,69 +2211,6 @@ private fun ThreePictureCaptureScreen(
             }
         }
 
-        // Auto-capture confirmation banner (8s hold before moving to Pic 3)
-        if (captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE &&
-            handInGripBitmap != null &&
-            autoCapturedThisStage &&
-            confirmSecondsLeft > 0
-        ) {
-            Card(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 24.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xF00A0F12)),
-                border = BorderStroke(1.5.dp, Color(0xFF00FF88))
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "BEVEL ${target.targetBevel} MATCHED — AUTO-CAPTURED",
-                        color = Color(0xFF00FF88),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Lock in this ${target.gripName} feel, then prepare for your final grip picture (${confirmSecondsLeft}s).",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(
-                            onClick = {
-                                confirmSecondsLeft = 0
-                                autoCapturedThisStage = false
-                                onHandInGripCaptured(null)
-                            },
-                            shape = CircleShape
-                        ) {
-                            Text("Retake", color = Color.White, fontSize = 11.sp)
-                        }
-                        Button(
-                            onClick = {
-                                confirmSecondsLeft = 0
-                                onCaptureStageChange(CaptureStage.FINAL_GRIP_PICTURE)
-                            },
-                            shape = CircleShape,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF00FF88),
-                                contentColor = Color.Black
-                            )
-                        ) {
-                            Text("Next Now →", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -2354,10 +2277,7 @@ private fun ThreePictureCaptureScreen(
                         fontWeight = FontWeight.SemiBold
                     )
 
-                    if (captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE &&
-                        handInGripBitmap == null &&
-                        holdProgress > 0f
-                    ) {
+                    if (captureStage == CaptureStage.HAND_ON_HANDLE_PICTURE && holdProgress > 0f) {
                         Spacer(modifier = Modifier.height(8.dp))
                         LinearProgressIndicator(
                             progress = { holdProgress },
@@ -2406,7 +2326,7 @@ private fun ThreePictureCaptureScreen(
                                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
                             ) {
                                 Text(
-                                    text = "NEXT: PIC 2 →",
+                                    text = "NEXT: KNUCKLE MATCH →",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -2419,44 +2339,17 @@ private fun ThreePictureCaptureScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
                             onClick = {
-                                if (handInGripBitmap == null) {
-                                    autoCapturedThisStage = true
-                                    tracker.captureNextFrame = true
-                                } else {
-                                    confirmSecondsLeft = 0
-                                    autoCapturedThisStage = false
-                                    onHandInGripCaptured(null)
-                                }
+                                autoTriggeredForStage2 = true
+                                tracker.captureNextFrame = true
                             },
                             shape = CircleShape,
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
                         ) {
                             Text(
-                                text = if (handInGripBitmap == null) "SNAP NOW" else "RETAKE PIC 2",
+                                text = "SNAP & NEXT →",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
-                        }
-
-                        if (handInGripBitmap != null) {
-                            Button(
-                                onClick = {
-                                    confirmSecondsLeft = 0
-                                    onCaptureStageChange(CaptureStage.FINAL_GRIP_PICTURE)
-                                },
-                                shape = CircleShape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF00FF88),
-                                    contentColor = Color.Black
-                                ),
-                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
-                            ) {
-                                Text(
-                                    text = "NEXT: PIC 3 →",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
                         }
                     }
                 }
@@ -2475,7 +2368,7 @@ private fun ThreePictureCaptureScreen(
                             contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
                         ) {
                             Text(
-                                text = if (finalGripBitmap == null) "TAKE PIC 3" else "RETAKE PIC 3",
+                                text = if (finalGripBitmap == null) "TAKE AI PIC" else "RETAKE AI PIC",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -2705,7 +2598,7 @@ fun AiGripResultScreen(
                     modifier = Modifier.weight(1f),
                     shape = CircleShape
                 ) {
-                    Text("Retake Pic 3", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Retake AI Pic", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 Button(
                     onClick = onNewShot,
