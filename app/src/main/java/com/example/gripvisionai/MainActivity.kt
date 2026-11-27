@@ -218,8 +218,8 @@ val SUPPORT_HAND_COLOR = Color(0xFF00E5FF)
 object AppBackgrounds {
     @DrawableRes val LoadUpStadium = R.drawable.bg_futuristic_stadium
     @DrawableRes val TennisCourt = R.drawable.bg_court_tennis
-    @DrawableRes val PadelCourt = R.drawable.bg_court_padel
-    @DrawableRes val PickleballCourt = R.drawable.bg_court_pickleball
+    @DrawableRes val PadelCourt = R.drawable.bg_court_pickleball
+    @DrawableRes val PickleballCourt = R.drawable.bg_court_padel
 
     @DrawableRes
     fun forSport(sport: GripSport): Int = when (sport) {
